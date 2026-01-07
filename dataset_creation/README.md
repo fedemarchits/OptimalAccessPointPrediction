@@ -56,11 +56,11 @@ We then randomly sample **100 points per cluster**, ensuring our training data i
 <table>
   <tr>
     <td align="center">
-      <img src="../imgs/Bologna_Italy_clusters.png" width="400" />
+      <img src="../img/Bologna_Italy_clusters.png" width="400" />
       <br />
     </td>
     <td align="center">
-      <img src="../imgs/Paris_France_clusters.png" width="400" />
+      <img src="../img/Paris_France_clusters.png" width="400" />
       <br />
     </td>
   </tr>
