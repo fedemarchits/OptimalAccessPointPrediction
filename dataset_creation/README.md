@@ -22,7 +22,7 @@ Using the `osmnx` library, we query the OpenStreetMap Nominatim API to fetch the
 
 **Goal:** Generate a diverse, balanced set of ~40,000 candidate points that represent the full spectrum of urban environments, from dense city centers to sparse suburbs and empty areas.
 
-We utilize a custom "Safe-Sampling" script to process each city without hitting API limits.
+We utilize a custom **Safe-Sampling** script to process each city without hitting API limits.
 
 ### 1. Adaptive Grid Generation
 
@@ -51,6 +51,20 @@ To avoid bias (e.g., only selecting city centers), we perform **K-Means Clusteri
 - **Clusters 3-4:** High-density urban cores.
 
 We then randomly sample **100 points per cluster**, ensuring our training data includes "bad" locations (sea/empty fields) as well as "good" ones. This results in **500 representative points per city**.
+
+#### Samples 
+<table>
+  <tr>
+    <td align="center">
+      <img src="../imgs/Bologna_Italy_clusters.png" width="400" />
+      <br />
+    </td>
+    <td align="center">
+      <img src="../imgs/Paris_France_clusters.png" width="400" />
+      <br />
+    </td>
+  </tr>
+</table>
 
 ---
 
