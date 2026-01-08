@@ -1,0 +1,11 @@
+numpy
+pandas
+geopandas
+shapely
+osmnx
+scikit-learn
+rasterio
+requests
+contextily
+matplotlib
+tqdm
