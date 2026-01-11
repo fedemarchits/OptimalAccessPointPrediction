@@ -6,7 +6,7 @@
 - [Input Tensor Construction](#input-tensor-construction)
 - [Target Label Generation](#target-label-generation)
 
-## Introduction
+## **Introduction**
 
 ### 🏙️ Cities
 
@@ -63,7 +63,7 @@ These dataset considers **90 major cities** in **12 different European Countries
 | Coimbra             | Örebro            | Winterthur             |
 |                     | Linköping         | Lucerne                |
 
-## Input Tensor Construction
+## **Input Tensor Construction**
 
 What we want to achieve for the input is a **3D tensor** with:
 
@@ -144,9 +144,9 @@ The workflow consists of three sequential stages:
 
 ---
 
-## 📂 Script Details
+### 📂 **Script Details**
 
-### 1. City Bounding Box Generator
+#### 1. City Bounding Box Generator
 
 **Script:** `city_bounding_box_generator.py`
 
@@ -159,7 +159,7 @@ This script initializes the project by defining the geographical scope. It itera
   - Formats coordinates into a polygon structure.
 - **Output**: `cities_bboxes_major_europe.json` containing the bounding box coordinates for each successfully processed city.
 
-### 2. Parallel Sampling & Clustering
+#### 2. Parallel Sampling & Clustering
 
 **Script:** `point_clusters_generator.py`
 
@@ -178,7 +178,7 @@ This is the core processing engine. It moves from raw bounding boxes to a set of
 - **Output**: `final_clustered_samples.json` (A JSON list of sampled points with their cluster IDs and density metrics).
 - **Visualization**: Saves cluster maps to `./imgs/cluster_images/` for visualization and verification.
 
-### 3. Isochrone Enrichment
+#### 3. Isochrone Enrichment
 
 **Script:** `population_isochrones_generator.py`
 
