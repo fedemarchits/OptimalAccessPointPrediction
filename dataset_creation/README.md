@@ -124,6 +124,23 @@ You can check directly on [**iso4app**](https://www.iso4app.net/) website for sp
   - **Normalization:** Clips and scales raw reflectance values to standard 8-bit RGB integers.
   - **Export:** Saves the final output as georeferenced TIFFs (`EPSG:3857`) ready for computer vision tasks.
 
+Examples below of satellite imgs for **Bologna** and **Nantes**.
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="../img/Bologna_Italy_10m.png" width="400px;" alt="Bologna"/>
+      <br />
+      <sub><b>Figure 1:</b> Sentinel-2 Capture of Bologna, Italy</sub>
+    </td>
+    <td align="center">
+      <img src="../img/Nantes_France_10m.png" width="400px;" alt="Nantes"/>
+      <br />
+      <sub><b>Figure 2:</b> Sentinel-2 Capture of Nantes, France</sub>
+    </td>
+  </tr>
+</table>
+
 ### Height Data (TanDEM-X DEM)
 
 ### Segmentation Data (WorldCover (ESA))
@@ -177,6 +194,23 @@ This is the core processing engine. It moves from raw bounding boxes to a set of
   - **Stratified Sampling**: Selects a fixed number of random points (default: 100) from each cluster to ensuring the final dataset represents the full diversity of the city.
 - **Output**: `final_clustered_samples.json` (A JSON list of sampled points with their cluster IDs and density metrics).
 - **Visualization**: Saves cluster maps to `./imgs/cluster_images/` for visualization and verification.
+
+Exmaples below:
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="../img/Bologna_Italy_clusters.png" width="400px;" alt="Bologna"/>
+      <br />
+      <sub><b>Figure 1:</b> Clustered Points of Bologna, Italy</sub>
+    </td>
+    <td align="center">
+      <img src="../img/Nantes_France_clusters.png" width="400px;" alt="Nantes"/>
+      <br />
+      <sub><b>Figure 2:</b> Clustered Points of Nantes, France</sub>
+    </td>
+  </tr>
+</table>
 
 #### 3. Isochrone Enrichment
 
