@@ -1,5 +1,4 @@
 import matplotlib
-# Force headless mode (must be done before importing pyplot)
 matplotlib.use('Agg') 
 
 import json
@@ -18,6 +17,7 @@ import os
 import time
 import networkx as nx
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- CONFIGURATION ---
 INPUT_FILE = "./data/cities_bboxes_major_europe.json"
@@ -26,13 +26,14 @@ SAMPLES_PER_CLUSTER = 100
 N_CLUSTERS = 5
 MIN_CANDIDATES = 2000
 TARGET_STEP_METERS = 450
+MAX_WORKERS = 4  # OPTIMIZED: Matches your 4-slot limit
 
 # --- SETTINGS ---
 ox.settings.log_console = False
 ox.settings.use_cache = True
 ox.settings.cache_folder = "./cache"
 ox.settings.user_agent = "CityAnalysis_ResearchProject/1.0"
-ox.settings.timeout = 45
+ox.settings.timeout = 60
 warnings.filterwarnings("ignore")
 
 def parse_bbox_from_json(bbox_coords):
@@ -64,11 +65,19 @@ def generate_adaptive_grid(minx, miny, maxx, maxy, min_candidates=2000, target_s
     points = [Point(x, y) for x in x_coords for y in y_coords]
     return gpd.GeoDataFrame(geometry=points, crs="EPSG:4326")
 
-def get_chunk_points(minx, miny, maxx, maxy, step_meters=5000):
-    """Generates center points for downloading data in safe chunks"""
+# --- OPTIMIZED CHUNKING: 2900m STEP ---
+def get_chunk_points(minx, miny, maxx, maxy, step_meters=2900):
+    """
+    Generates download centers with 2900m spacing.
+    This creates slight overlap for 3000m (radius=1500) tiles.
+    """
     lat_center = (miny + maxy) / 2
-    meters_per_deg = 111320
-    step = step_meters / meters_per_deg
+    
+    meters_per_deg_lat = 111320
+    meters_per_deg_lon = 111320 * cos(radians(lat_center))
+    
+    step_x = step_meters / meters_per_deg_lon
+    step_y = step_meters / meters_per_deg_lat
     
     download_points = []
     x = minx
@@ -76,49 +85,97 @@ def get_chunk_points(minx, miny, maxx, maxy, step_meters=5000):
         y = miny
         while y < maxy:
             download_points.append((y, x))
-            y += step
-        x += step
+            y += step_y
+        x += step_x
     return download_points
 
+# --- HELPER WORKER FUNCTIONS ---
+
+def fetch_road_chunk(coords):
+    lat, lon = coords
+    try:
+        for attempt in range(3):
+            try:
+                # OPTIMIZED: dist=1500 (3km wide tile)
+                G = ox.graph_from_point((lat, lon), dist=1500, network_type='drive', simplify=True)
+                if len(G.nodes) > 0:
+                    return G
+            except Exception as e:
+                if "429" in str(e):
+                    time.sleep(2 * (attempt + 1)) 
+                    continue
+                raise e
+            break
+    except Exception:
+        return None
+    return None
+
+def fetch_feature_chunk(args):
+    coords, tags = args
+    lat, lon = coords
+    try:
+        for attempt in range(3):
+            try:
+                # OPTIMIZED: dist=1500 (3km wide tile)
+                gdf = ox.features_from_point((lat, lon), tags=tags, dist=1500)
+                if not gdf.empty:
+                    return gdf
+            except Exception as e:
+                if "429" in str(e):
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise e
+            break
+    except Exception:
+        return None
+    return None
+
+# --- PARALLEL DOWNLOADER FUNCTIONS ---
+
 def download_roads_safe(download_points):
-    # Quietly download road chunks
+    print(f"      Downloading Roads ({len(download_points)} big chunks)...")
     all_graphs = []
     
-    for i, (lat, lon) in enumerate(download_points):
-        try:
-            G = ox.graph_from_point((lat, lon), dist=750, network_type='drive', simplify=True)
-            if len(G.nodes) > 0:
-                all_graphs.append(G)
-        except Exception:
-            pass
-        if i % 5 == 0: time.sleep(0.5) 
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(fetch_road_chunk, pt): pt for pt in download_points}
+        
+        for i, future in enumerate(as_completed(futures)):
+            print(f"        [Roads] Chunk {i+1}/{len(download_points)}...", end='\r')
+            result = future.result()
+            if result is not None:
+                all_graphs.append(result)
+            if i % 10 == 0: time.sleep(0.1)
 
+    print(f"\n      ✔ Got {len(all_graphs)} road chunks.")
     if not all_graphs: return gpd.GeoDataFrame()
     
-    # Merge logic
     combined_G = nx.compose_all(all_graphs)
     combined_G = ox.convert.to_undirected(combined_G)
-    
     _, edges_gdf = ox.graph_to_gdfs(combined_G)
     return edges_gdf[~edges_gdf.index.duplicated(keep='first')]
 
-def download_features_safe(download_points, tags):
-    # Quietly download feature chunks (buildings/POIs)
+def download_features_safe(download_points, tags, label="Features"):
+    print(f"      Downloading {label} ({len(download_points)} chunks)...")
     all_gdfs = []
     
-    for i, (lat, lon) in enumerate(download_points):
-        try:
-            gdf = ox.features_from_point((lat, lon), tags=tags, dist=750)
-            if not gdf.empty:
-                all_gdfs.append(gdf)
-        except Exception:
-            pass
-        if i % 5 == 0: time.sleep(0.5)
-
+    tasks = [(pt, tags) for pt in download_points]
+    
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(fetch_feature_chunk, t): t for t in tasks}
+        
+        for i, future in enumerate(as_completed(futures)):
+            print(f"        [{label}] Chunk {i+1}/{len(download_points)}...", end='\r')
+            result = future.result()
+            if result is not None:
+                all_gdfs.append(result)
+                
+    print(f"\n      ✔ Got {len(all_gdfs)} {label} chunks.")
     if not all_gdfs: return gpd.GeoDataFrame()
     
     combined = pd.concat(all_gdfs)
     return combined[~combined.index.duplicated(keep='first')]
+
+# --- METRIC CALCULATION ---
 
 def calculate_full_metrics(gdf_grid, roads, buildings, pois):
     """Calculates Road, Building, and POI density"""
@@ -128,7 +185,6 @@ def calculate_full_metrics(gdf_grid, roads, buildings, pois):
     gdf_utm = gdf_grid.to_crs(utm_crs)
     gdf_buffers = gdf_utm.copy()
     
-    # Create 250m analysis radius around each point
     gdf_buffers['geometry'] = gdf_buffers.geometry.buffer(250)
     buffer_area = np.pi * (250**2)
 
@@ -168,26 +224,31 @@ def calculate_full_metrics(gdf_grid, roads, buildings, pois):
 
     return gdf_grid
 
+# --- FIXED FUNCTION: CORRECT CLUSTERING ---
 def cluster_and_sample(gdf):
-    """Cluster based on 5 dimensions"""
     if len(gdf) < N_CLUSTERS: return gdf
     
+    # 1. Use ONLY density features (Removed coords/p.x/p.y)
     features_to_cluster = ['road_density', 'building_density', 'poi_density']
+    
     valid_features = [f for f in features_to_cluster if f in gdf.columns and gdf[f].sum() > 0]
     
-    coords = np.array([[p.x, p.y] for p in gdf.geometry])
+    if not valid_features:
+        return gdf 
     
     scaler = MinMaxScaler()
-    scaled_features = [scaler.fit_transform(coords)]
+    scaled_features = []
     
+    # 2. Scale only the density data
     for feature in valid_features:
         f_data = gdf[feature].values.reshape(-1, 1)
         scaled_features.append(scaler.fit_transform(f_data))
     
+    # 3. Stack features and Cluster
     final_matrix = np.hstack(scaled_features)
-    
     gdf['cluster'] = KMeans(n_clusters=N_CLUSTERS, random_state=42).fit_predict(final_matrix)
     
+    # 4. Stratified Sampling
     samples = []
     for c in range(N_CLUSTERS):
         subset = gdf[gdf['cluster'] == c]
@@ -199,10 +260,8 @@ def cluster_and_sample(gdf):
     return pd.concat(samples)
 
 def plot_city_clusters(gdf, city_name):
-    # Clean city name for filename (remove commas/spaces)
     safe_name = city_name.replace(", ", "_").replace(" ", "_")
-    
-    os.makedirs("./imgs", exist_ok=True)
+    os.makedirs("./imgs/cluster_images", exist_ok=True)
     
     gdf_web = gdf.to_crs(epsg=3857)
     fig, ax = plt.subplots(figsize=(12, 12))
@@ -218,17 +277,17 @@ def plot_city_clusters(gdf, city_name):
     ax.set_title(f"{city_name}\nClustered Sampling Points", fontsize=16, fontweight='bold')
     ax.set_axis_off()
     
-    # Save image without showing it
-    plt.savefig(f"./imgs/{safe_name}_clusters.png", dpi=150, bbox_inches='tight')
-    plt.close(fig) # Explicitly close the specific figure to free memory
+    plt.savefig(f"./imgs/cluster_images/{safe_name}_clusters.png", dpi=150, bbox_inches='tight')
+    plt.close(fig)
 
 def main():
     print("\n" + "="*70)
-    print("FULL CITY SAMPLING GENERATOR")
+    print("FULL CITY SAMPLING GENERATOR (Parallel Mode 🚀)")
     print("="*70)
     
     os.makedirs("./cache", exist_ok=True)
-    os.makedirs("./imgs", exist_ok=True)
+    os.makedirs("./imgs/cluster_images", exist_ok=True)
+    os.makedirs("./data", exist_ok=True)
     
     try:
         with open(INPUT_FILE, 'r') as f:
@@ -239,11 +298,24 @@ def main():
 
     cities = data.get("cities", [])
     all_results = []
+    processed_cities = set()
+
+    if os.path.exists(OUTPUT_FILE):
+        try:
+            print(f"📂 Found existing data file: {OUTPUT_FILE}")
+            existing_df = pd.read_json(OUTPUT_FILE)
+            if not existing_df.empty and 'city' in existing_df.columns:
+                all_results.append(existing_df)
+                processed_cities = set(existing_df['city'].unique())
+                print(f"✔ Resuming... Skipping {len(processed_cities)} cities already completed.")
+                print(f"  (Skipped: {', '.join(list(processed_cities)[:3])}...)")
+        except ValueError:
+            print("⚠ Output file exists but appears corrupt or empty. Starting fresh.")
     
-    print(f"Found {len(cities)} cities to process.")
+    cities_to_process = [c for c in cities if c['city'] not in processed_cities]
+    print(f"🚀 {len(cities_to_process)} cities remaining to process.")
     
-    # Use TQDM for a nice progress bar across cities
-    pbar = tqdm(cities, unit="city")
+    pbar = tqdm(cities_to_process, unit="city")
     
     for entry in pbar:
         city_name = entry['city']
@@ -253,36 +325,29 @@ def main():
             bbox_coords = entry['bbox']
             minx, miny, maxx, maxy = parse_bbox_from_json(bbox_coords)
             
-            # 1. Grid
             gdf_grid = generate_adaptive_grid(minx, miny, maxx, maxy, min_candidates=MIN_CANDIDATES)
-            
-            # 2. Safe Downloads
             chunk_points = get_chunk_points(minx, miny, maxx, maxy)
             
-            pbar.write(f"   Downloading data for {city_name}...")
+            pbar.write(f"\n   Downloading data for {city_name}...")
             roads = download_roads_safe(chunk_points)
-            buildings = download_features_safe(chunk_points, {'building': True})
-            pois = download_features_safe(chunk_points, {'amenity': True, 'shop': True, 'office': True, 'leisure': True})
+            buildings = download_features_safe(chunk_points, {'building': True}, "Buildings")
+            pois = download_features_safe(chunk_points, {'amenity': True, 'shop': True, 'office': True, 'leisure': True}, "POIs")
             
-            # 3. Calculate Metrics
             gdf_features = calculate_full_metrics(gdf_grid, roads, buildings, pois)
-            
-            # 4. Cluster & Sample
             gdf_sampled = cluster_and_sample(gdf_features)
-            
-            # 5. Visualize (Save Image Only)
             plot_city_clusters(gdf_sampled, city_name)
             
-            # 6. Prepare for Export
             gdf_sampled['city'] = city_name
             gdf_sampled['lat'] = gdf_sampled.geometry.y
             gdf_sampled['lon'] = gdf_sampled.geometry.x
             
-            # Select columns to keep
             cols = ['city', 'cluster', 'lat', 'lon', 'road_density', 'building_density', 'poi_density']
-            # Only keep columns that actually exist
             existing_cols = [c for c in cols if c in gdf_sampled.columns]
-            all_results.append(gdf_sampled[existing_cols])
+            
+            new_df = gdf_sampled[existing_cols]
+            all_results.append(new_df)
+
+            pd.concat(all_results).to_json(OUTPUT_FILE, orient="records", indent=4)
             
         except KeyboardInterrupt:
             print("\n⚠ Interrupted by user.")
@@ -290,12 +355,8 @@ def main():
         except Exception as e:
             pbar.write(f"✘ Error on {city_name}: {e}")
 
-    # Final Save
     if all_results:
-        final_df = pd.concat(all_results)
-        final_df.to_json(OUTPUT_FILE, orient="records", indent=4)
-        print(f"\nSUCCESS: Data for {len(all_results)} cities saved to {OUTPUT_FILE}")
-        print("Images saved in ./imgs/")
+        print(f"\nSUCCESS: Data saved to {OUTPUT_FILE}")
     else:
         print("\nNo data collected.")
 
