@@ -19,7 +19,7 @@ BACKUP_FILE = "./data/final_clustered_samples_backup.json"
 # ISO4App Configuration
 ISOLINE_BASE_URL = "http://www.iso4app.net/rest/1.3/isoline.geojson"
 POPULATION_BASE_URL = "https://api.iso4app.com"
-LICENSE_KEY = "B0D0FC12-D872-4A2D-AED8-8BF55D4E48AE"
+LICENSE_KEY = "YOUR_API_KEY"
 
 # Walking parameters
 WALKING_TIME_MINUTES = 15
@@ -27,8 +27,8 @@ WALKING_TIME_SECONDS = WALKING_TIME_MINUTES * 60
 MOBILITY_TYPE = "pedestrian"
 
 # Credentials - UPDATE THESE!
-USERNAME = "federicom"
-PASSWORD = "federico0504!"
+USERNAME = "YOUR_USERNAME"
+PASSWORD = "YOUR_PASSWORD"
 
 # API settings
 DELAY_BETWEEN_CALLS = 5  # seconds between points
