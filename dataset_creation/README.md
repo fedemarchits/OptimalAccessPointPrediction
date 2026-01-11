@@ -149,7 +149,7 @@ Examples below of satellite imgs for **Bologna** and **Nantes**.
 
 This pipeline automates the extraction of urban data across major European cities. It progresses from defining geographical boundaries to generating stratified sampling points based on urban density, and finally enriching those points with walking isochrones and population data.
 
-# Pipeline Overview
+## Pipeline Overview
 
 The workflow consists of three sequential stages:
 
