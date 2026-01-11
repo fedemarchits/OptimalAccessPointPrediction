@@ -3,7 +3,8 @@
 ## Table of Contents
 
 - [Introduction](#introduction)
-- [Dataset Input Creation](#dataset-input-creation)
+- [Input Tensor Construction](#input-tensor-construction)
+- [Target Label Generation](#target-label-generation)
 
 ## Introduction
 
@@ -62,7 +63,7 @@ These dataset considers **90 major cities** in **12 different European Countries
 | Coimbra             | Örebro            | Winterthur             |
 |                     | Linköping         | Lucerne                |
 
-## Dataset Input Creation
+## Input Tensor Construction
 
 What we want to achieve for the input is a **3D tensor** with:
 
@@ -129,9 +130,7 @@ You can check directly on [**iso4app**](https://www.iso4app.net/) website for sp
 
 ### Vegetation (HR-VPP NDVI | Copernicus)
 
-## Ground Truth Creation
-
-# 🏙️ Urban Analysis & Isochrone Enrichment Pipeline
+## Target Label Generation
 
 This pipeline automates the extraction of urban data across major European cities. It progresses from defining geographical boundaries to generating stratified sampling points based on urban density, and finally enriching those points with walking isochrones and population data.
 
