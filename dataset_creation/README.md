@@ -1,14 +1,12 @@
-# Dataset
-
 ## Table of Contents
 
 - [Introduction](#introduction)
 - [Input Tensor Construction](#input-tensor-construction)
 - [Target Label Generation](#target-label-generation)
 
-## **Introduction**
+# **Introduction**
 
-### 🏙️ Cities
+## 🏙️ Cities
 
 We chose to focus exclusively on Europe for our case study for the following reasons:
 
@@ -63,7 +61,7 @@ These dataset considers **90 major cities** in **12 different European Countries
 | Coimbra             | Örebro            | Winterthur             |
 |                     | Linköping         | Lucerne                |
 
-## **Input Tensor Construction**
+# **Input Tensor Construction**
 
 What we want to achieve for the input is a **3D tensor** with:
 
@@ -80,7 +78,7 @@ Each channel is explained below:
 | **Segmentation** _1 channel_ | WorldCover (ESA) or Dynamic LULC (Copernicus) | 10m        | 11 classes: forest, cropland, built-up, water, park, industrial equiv., etc. |
 | **Vegetation** _1 channel_   | HR-VPP NDVI (Copernicus)                      | 10m        | NDVI (-1 to 1)                                                               |
 
-### RGB Images (Sentinel-2 | Copernicus)
+## RGB Images (Sentinel-2 | Copernicus)
 
 The RGB images we got are from **Sentinel-2** satellite, they are at a **10m resolution**. More specifically the script in charge of downloading images can be founder here [`get_RGB_sentinel.py`](get_RGB_sentinel.py).
 
@@ -141,17 +139,17 @@ Examples below of satellite imgs for **Bologna** and **Nantes**.
   </tr>
 </table>
 
-### Height Data (TanDEM-X DEM)
+## Height Data (TanDEM-X DEM)
 
-### Segmentation Data (WorldCover (ESA))
+## Segmentation Data (WorldCover (ESA))
 
-### Vegetation (HR-VPP NDVI | Copernicus)
+## Vegetation (HR-VPP NDVI | Copernicus)
 
-## Target Label Generation
+# Target Label Generation
 
 This pipeline automates the extraction of urban data across major European cities. It progresses from defining geographical boundaries to generating stratified sampling points based on urban density, and finally enriching those points with walking isochrones and population data.
 
-## Pipeline Overview
+# Pipeline Overview
 
 The workflow consists of three sequential stages:
 
@@ -161,9 +159,9 @@ The workflow consists of three sequential stages:
 
 ---
 
-### 📂 **Script Details**
+## 📂 **Script Details**
 
-#### 1. City Bounding Box Generator
+### 1. City Bounding Box Generator
 
 **Script:** `city_bounding_box_generator.py`
 
@@ -176,7 +174,7 @@ This script initializes the project by defining the geographical scope. It itera
   - Formats coordinates into a polygon structure.
 - **Output**: `cities_bboxes_major_europe.json` containing the bounding box coordinates for each successfully processed city.
 
-#### 2. Parallel Sampling & Clustering
+### 2. Parallel Sampling & Clustering
 
 **Script:** `point_clusters_generator.py`
 
@@ -212,7 +210,7 @@ Exmaples below:
   </tr>
 </table>
 
-#### 3. Isochrone Enrichment
+### 3. Isochrone Enrichment
 
 **Script:** `population_isochrones_generator.py`
 
