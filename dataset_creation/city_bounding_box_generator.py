@@ -44,13 +44,12 @@ if __name__ == "__main__":
         "Brussels, Belgium", "Antwerp, Belgium", "Ghent, Belgium", "Charleroi, Belgium",
         "Liège, Belgium", "Bruges, Belgium", "Namur, Belgium",
         # Denmark
-        "Copenhagen, Denmark", "Aarhus, Denmark", "Odense, Denmark", "Aalborg, Denmark", "Esbjerg, Denmark",
+        "Copenhagen, Denmark",
         # Finland
         "Helsinki, Finland", "Espoo, Finland", "Tampere, Finland", "Vantaa, Finland",
         "Oulu, Finland", "Turku, Finland",
         # Greece
-        "Athens, Greece", "Thessaloniki, Greece", "Patras, Greece", "Heraklion, Greece",
-        "Larissa, Greece", "Volos, Greece",
+        "Thessaloniki, Greece", "Volos, Greece",
         # Netherlands
         "Amsterdam, Netherlands", "Rotterdam, Netherlands", "The Hague, Netherlands",
         "Utrecht, Netherlands", "Eindhoven, Netherlands", "Tilburg, Netherlands", "Groningen, Netherlands",
@@ -60,13 +59,13 @@ if __name__ == "__main__":
         "Lisbon, Portugal", "Porto, Portugal", "Vila Nova de Gaia, Portugal", "Amadora, Portugal",
         "Braga, Portugal", "Coimbra, Portugal",
         # Sweden
-        "Stockholm, Sweden", "Gothenburg, Sweden", "Malmö, Sweden", "Uppsala, Sweden",
+        "Stockholm, Sweden", "Malmö, Sweden", "Uppsala, Sweden",
         "Västerås, Sweden", "Örebro, Sweden", "Linköping, Sweden",
         # Switzerland
         "Zurich, Switzerland", "Geneva, Switzerland", "Basel, Switzerland", "Lausanne, Switzerland",
         "Bern, Switzerland", "Winterthur, Switzerland", "Lucerne, Switzerland",
         # United Kingdom
-        "London, United Kingdom", "Birmingham, United Kingdom", "Glasgow, United Kingdom", #glasgow doesn't work??
+        "London, United Kingdom", "Birmingham, United Kingdom",
         "Leeds, United Kingdom", "Liverpool, United Kingdom", "Manchester, United Kingdom",
         "Bristol, United Kingdom", "Sheffield, United Kingdom", "Edinburgh, United Kingdom"
     ]
