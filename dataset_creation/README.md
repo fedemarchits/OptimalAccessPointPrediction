@@ -136,14 +136,14 @@ To distinguish between functional urban zones (e.g., Commercial vs. Residential)
   - We download vector polygons for specific `landuse`, `amenity`, and `leisure` tags using `osmnx`.
   - We rasterize these polygons onto the target **10m grid**, aligning them perfectly with the Sentinel-2 pixels.
 - **Classes**: The resulting single-channel image contains integer codes representing:
-  1. Residential
-  2. Commercial/Office
-  3. Industrial
-  4. Retail
-  5. Public/Education
-  6. Parks/Leisure
-  7. Natural/Water
-  0. Other/Background
+  * Residential
+  * Commercial/Office
+  * Industrial
+  * Retail
+  * Public/Education
+  * Parks/Leisure
+  * Natural/Water
+  * Other/Background
 - **Tensor Transformation**: This channel is **One-Hot Encoded** during training into **8 binary channels** (one for each active class).
 - 
 ## RGB Images (Sentinel-2 | Copernicus)
