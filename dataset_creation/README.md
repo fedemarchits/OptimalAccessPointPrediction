@@ -56,23 +56,53 @@ These dataset considers **90 major cities** in **12 different European Countries
 |                    | Thessaloniki      |
 
 
-# **Input Tensor Construction**
+## Input Tensor Construction
 
 What we want to achieve for the input is a **3D tensor** with:
 
-- **6 channels**;
+- **16 channels** (expanded from raw data);
 - **H x W** pixels depending on the city;
 - **10m spatial resolution**.
 
 Each channel is explained below:
 
-| Channel                      | Source                                        | Resolution | Classes/Range                                                                |
-| ---------------------------- | --------------------------------------------- | ---------- | ---------------------------------------------------------------------------- |
-| **RGB** _3 channels_         | Sentinel-2 (Copernicus)                       | 10m        | True color (B4,B3,B2)                                                        |
-| **Height** _1 channel_       | TanDEM-X DEM                                  | 12m        | Elevation (m)                                                                |
-| **Segmentation** _1 channel_ | WorldCover (ESA) or Dynamic LULC (Copernicus) | 10m        | 11 classes: forest, cropland, built-up, water, park, industrial equiv., etc. |
-| **Vegetation** _1 channel_   | HR-VPP NDVI (Copernicus)                      | 10m        | NDVI (-1 to 1)                                                               |
+| Channel | Source | Resolution | Classes/Range |
+| :--- | :--- | :--- | :--- |
+| **RGB** _3 channels_ | Sentinel-2 (Copernicus) | 10m | True color (B4, B3, B2) normalized [0-255] |
+| **Height** _1 channel_ | Copernicus DEM (GLO-30) | 30m (Upsampled to 10m) | Absolute Elevation (meters) |
+| **Vegetation** _1 channel_ | Sentinel-2 (Calculated) | 10m | NDVI Index [-1.0 to 1.0] |
+| **Segmentation** _11 channels_ | ESA WorldCover | 10m | **One-Hot Encoded** Binary Masks (0 or 1) for each class (11 class in total) |
 
+### RGB Images (Sentinel-2) & Vegetation (NDVI)
+
+**Script:** `get_imgs_sentinel_2.py`
+
+Both RGB and Vegetation data are derived from the **Sentinel-2 L2A** satellite mission.
+
+- **RGB**: We extract the Red, Green, and Blue bands (10m resolution).
+- **NDVI (Vegetation)**: Instead of using an external product (which might be temporally misaligned), we calculate the Normalized Difference Vegetation Index directly from the *same* Sentinel-2 capture using the Near-Infrared (NIR) and Red bands.
+  - **Formula**: $$NDVI = \frac{(NIR - Red)}{(NIR + Red)}$$
+  - This ensures 100% temporal consistency: if a tree appears in the RGB image, it will have a corresponding high value in the NDVI channel.
+
+### Height Data (Copernicus DEM)
+
+**Script:** `get_city_dem.py`
+
+For elevation, we use the **Copernicus DEM (GLO-30)** via Microsoft Planetary Computer.
+
+- **Source Resolution**: 30m.
+- **Processing**: The script automatically upsamples this data to our target **10m grid** using **Bilinear Interpolation**. This smooths the values to prevent "stair-step" artifacts, providing a continuous elevation surface that aligns perfectly with the Sentinel-2 pixels.
+
+### Segmentation (ESA WorldCover)
+
+**Script:** `get_segmentation_esa.py`
+
+We use **ESA WorldCover** to provide the model with semantic knowledge of the urban layout.
+
+- **Raw Data**: The source file contains a single channel with integer class IDs (e.g., `10`=Trees, `50`=Built-up).
+- **Tensor Transformation**: Since these are categorical variables, they cannot be treated as continuous numbers (e.g., "Built-up (50)" is not 5x "Trees (10)"). Therefore, during the tensor construction, this single channel is **One-Hot Encoded** into 11 separate binary channels.
+The 11 classes are:
+<br>• Trees <br>• Shrubland <br>• Grassland <br>• Cropland <br>• Built-up <br>• Bare / sparse <br>• Snow and ice <br>• Permanent water <br>• Herbaceous wetland <br>• Mangroves <br>• Moss and lichen
 ## RGB Images (Sentinel-2 | Copernicus)
 
 The RGB images we got are from **Sentinel-2** satellite, they are at a **10m resolution**. More specifically the script in charge of downloading images can be founder here [`get_RGB_sentinel.py`](get_RGB_sentinel.py).
@@ -134,11 +164,42 @@ Examples below of satellite imgs for **Bologna** and **Nantes**.
   </tr>
 </table>
 
-## Height Data (TanDEM-X DEM)
+### Height Data (Copernicus DEM)
 
-## Segmentation Data (WorldCover (ESA))
+**Script:** `get_city_dem.py`
 
-## Vegetation (HR-VPP NDVI | Copernicus)
+For elevation data, we utilize the **Copernicus DEM (GLO-30)**, which provides global coverage at 30m resolution. While the native resolution is 30m, we upsample it to match our target 10m tensor grid.
+
+- **Source**: Microsoft Planetary Computer (`cop-dem-glo-30` collection).
+- **Methodology**:
+  - **Authentication**: Uses dynamic SAS token signing via the `planetary-computer` library to access Azure Blob Storage.
+  - **Resampling**: Since the source is 30m and our target is 10m, the script applies **Bilinear Interpolation** during the download. This smooths the transition between pixels, preventing the "stair-step" artifacts that occur with standard nearest-neighbor upsampling.
+  - **Void Filling**: Automatically fills missing data points (common over water bodies) with zero.
+- **Output**: A single-channel, 32-bit Float GeoTIFF representing absolute elevation in meters.
+
+### Segmentation Data (ESA WorldCover)
+
+**Script:** `get_segmentation_esa.py`
+
+To provide the model with semantic understanding of the urban layout, we use the **ESA WorldCover 10m** product. This provides a per-pixel classification of land use.
+
+- **Source**: ESA WorldCover v2021 (via Microsoft Planetary Computer `esa-worldcover` collection).
+- **Classes**: The data consists of discrete integer labels representing 11 distinct land cover classes.
+  - **Key Classes**: `10` (Trees), `40` (Cropland), `50` (Built-up/Urban), `80` (Permanent Water).
+- **Usage Note**: Since these values are categorical integers (not continuous), they are intended to be **One-Hot Encoded** during model training (expanding 1 channel into 11 binary channels) to prevent the model from misinterpreting categorical IDs as intensity values.
+
+### Vegetation (NDVI)
+
+**Script:** Integrated into `get_imgs_sentinel_2.py`
+
+Instead of downloading a separate vegetation product (like HR-VPP), we calculate the **Normalized Difference Vegetation Index (NDVI)** directly from the Sentinel-2 imagery.
+
+- **Why calculate it manually?**
+  - **Temporal Alignment**: By calculating NDVI from the *exact same* Sentinel-2 capture used for the RGB channels, we guarantee 100% temporal synchronization. This ensures that if a tree is visible in the RGB image, it appears as "high vegetation" in the NDVI channel. External products often average data over different weeks, leading to mismatches (e.g., a tree pruned between the two capture dates).
+- **Formula**:
+  $$NDVI = \frac{(NIR - Red)}{(NIR + Red)}$$
+  Where $NIR$ is Band 8 and $Red$ is Band 4 of the Sentinel-2 L2A product.
+- **Output**: A single-channel file with values ranging from **-1.0 to 1.0**, where high positive values indicate dense, healthy vegetation, and low/negative values indicate built-up areas or water.
 
 # Target Label Generation
 
