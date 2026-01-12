@@ -60,7 +60,7 @@ These dataset considers **90 major cities** in **12 different European Countries
 
 What we want to achieve for the input is a **3D tensor** with:
 
-- **16 channels** (expanded from raw data);
+- **13 channels** (expanded from raw data);
 - **H x W** pixels depending on the city;
 - **10m spatial resolution**.
 
@@ -71,7 +71,39 @@ Each channel is explained below:
 | **RGB** _3 channels_ | Sentinel-2 (Copernicus) | 10m | True color (B4, B3, B2) normalized [0-255] |
 | **Height** _1 channel_ | Copernicus DEM (GLO-30) | 30m (Upsampled to 10m) | Absolute Elevation (meters) |
 | **Vegetation** _1 channel_ | Sentinel-2 (Calculated) | 10m | NDVI Index [-1.0 to 1.0] |
-| **Segmentation** _11 channels_ | ESA WorldCover | 10m | **One-Hot Encoded** Binary Masks (0 or 1) for each class (11 class in total) |
+| **Land Use** _8 channels_ | OpenStreetMap (OSM) | 10m | **One-Hot Encoded** Binary Masks (0/1) for each class (8 classes) |
+
+### RGB Images (Sentinel-2) & Vegetation (NDVI)
+
+**Script:** `get_imgs_sentinel_2.py`
+
+Both RGB and Vegetation data are derived from the **Sentinel-2 L2A** satellite mission.
+
+- **RGB**: We extract the Red, Green, and Blue bands (10m resolution).
+- **NDVI (Vegetation)**: Instead of using an external product, we calculate the Normalized Difference Vegetation Index directly from the *same* Sentinel-2 capture.
+  - **Formula**: $$NDVI = \frac{(NIR - Red)}{(NIR + Red)}$$
+  - This ensures 100% temporal consistency.
+
+### Height Data (Copernicus DEM)
+
+**Script:** `get_city_dem.py`
+
+For elevation, we use the **Copernicus DEM (GLO-30)** via Microsoft Planetary Computer.
+
+- **Source Resolution**: 30m.
+- **Processing**: The script automatically upsamples this data to our target **10m grid** using **Bilinear Interpolation** to smooth artifacts.
+
+### Land Use Data (OpenStreetMap)
+
+**Script:** `get_landuse_osm.py`
+
+To distinguish between functional urban zones (e.g., Commercial vs. Residential), we generate land use masks directly from **OpenStreetMap (OSM)**.
+
+- **Why OSM?** Unlike Urban Atlas (which is updated every 6 years, last 2018), OSM provides near real-time data, ensuring the land use labels match the temporal reality of our 2022-2023 satellite imagery.
+- **Methodology**:
+  - We download vector polygons for specific `landuse`, `amenity`, and `leisure` tags using `osmnx`.
+  - We rasterize these polygons onto the target **10m grid**, aligning them perfectly with the Sentinel-2 pixels.
+- **Classes**: The resulting single-channel image contains integer codes [0-7] which are **One-Hot Encoded** during training into 8 binary channels.
 
 ### RGB Images (Sentinel-2) & Vegetation (NDVI)
 
@@ -93,16 +125,27 @@ For elevation, we use the **Copernicus DEM (GLO-30)** via Microsoft Planetary Co
 - **Source Resolution**: 30m.
 - **Processing**: The script automatically upsamples this data to our target **10m grid** using **Bilinear Interpolation**. This smooths the values to prevent "stair-step" artifacts, providing a continuous elevation surface that aligns perfectly with the Sentinel-2 pixels.
 
-### Segmentation (ESA WorldCover)
+### Land Use Data (OpenStreetMap)
 
-**Script:** `get_segmentation_esa.py`
+**Script:** `get_landuse_osm.py`
 
-We use **ESA WorldCover** to provide the model with semantic knowledge of the urban layout.
+To distinguish between functional urban zones (e.g., Commercial vs. Residential), we generate land use masks directly from **OpenStreetMap (OSM)**.
 
-- **Raw Data**: The source file contains a single channel with integer class IDs (e.g., `10`=Trees, `50`=Built-up).
-- **Tensor Transformation**: Since these are categorical variables, they cannot be treated as continuous numbers (e.g., "Built-up (50)" is not 5x "Trees (10)"). Therefore, during the tensor construction, this single channel is **One-Hot Encoded** into 11 separate binary channels.
-The 11 classes are:
-<br>• Trees <br>• Shrubland <br>• Grassland <br>• Cropland <br>• Built-up <br>• Bare / sparse <br>• Snow and ice <br>• Permanent water <br>• Herbaceous wetland <br>• Mangroves <br>• Moss and lichen
+- **Why OSM?** Unlike standard land cover maps (which only distinguish "Concrete" vs. "Grass"), OSM tags allow us to differentiate between **Residential**, **Commercial**, and **Industrial** areas. This semantic distinction is critical for estimating population behavior.
+- **Methodology**:
+  - We download vector polygons for specific `landuse`, `amenity`, and `leisure` tags using `osmnx`.
+  - We rasterize these polygons onto the target **10m grid**, aligning them perfectly with the Sentinel-2 pixels.
+- **Classes**: The resulting single-channel image contains integer codes representing:
+  1. Residential
+  2. Commercial/Office
+  3. Industrial
+  4. Retail
+  5. Public/Education
+  6. Parks/Leisure
+  7. Natural/Water
+  0. Other/Background
+- **Tensor Transformation**: This channel is **One-Hot Encoded** during training into **8 binary channels** (one for each active class).
+- 
 ## RGB Images (Sentinel-2 | Copernicus)
 
 The RGB images we got are from **Sentinel-2** satellite, they are at a **10m resolution**. More specifically the script in charge of downloading images can be founder here [`get_RGB_sentinel.py`](get_RGB_sentinel.py).
