@@ -18,48 +18,43 @@ Moreover, we selected countries for which population data is available via [**is
 
 These dataset considers **90 major cities** in **12 different European Countries**. Below the list of the cities considered.
 
-| 🇮🇹 **Italy** (9) | 🇫🇷 **France** (10) | 🇦🇹 **Austria** (6) | 🇬🇧 **United Kingdom** (9) |
-| ---------------- | ------------------ | ------------------ | ------------------------- |
-| Rome             | Paris              | Vienna             | London                    |
-| Milan            | Marseille          | Graz               | Birmingham                |
-| Naples           | Lyon               | Linz               | Glasgow                   |
-| Turin            | Toulouse           | Salzburg           | Leeds                     |
-| Palermo          | Nice               | Innsbruck          | Liverpool                 |
-| Bologna          | Nantes             | Klagenfurt         | Manchester                |
-| Florence         | Montpellier        |                    | Bristol                   |
-| Bari             | Strasbourg         |                    | Sheffield                 |
-| Catania          | Bordeaux           |                    | Edinburgh                 |
-|                  | Lille              |                    |
+| 🇮🇹 **Italy** (9) | 🇫🇷 **France** (10) | 🇬🇧 **United Kingdom** (9) |
+| ---------------- | ------------------ | ------------------------- |
+| Rome             | Paris              | London                    |
+| Milan            | Marseille          | Birmingham                |
+| Naples           | Lyon               | Edinburgh                 |
+| Turin            | Toulouse           | Leeds                     |
+| Palermo          | Nice               | Liverpool                 |
+| Bologna          | Nantes             | Manchester                |
+| Florence         | Montpellier        | Bristol                   |
+| Bari             | Strasbourg         | Sheffield                 |
+| Catania          | Bordeaux           |                           |
+|                  | Lille              |                           |
 
-| 🇧🇪 **Belgium** (7) | 🇩🇰 **Denmark** (5) | 🇫🇮 **Finland** (6) |
-| ------------------ | ------------------ | ------------------ |
-| Brussels           | Copenhagen         | Helsinki           |
-| Antwerp            | Aarhus             | Espoo              |
-| Ghent              | Odense             | Tampere            |
-| Charleroi          | Aalborg            | Vantaa             |
-| Liège              | Esbjerg            | Oulu               |
-| Bruges             |                    | Turku              |
-| Namur              |                    |                    |
+| 🇧🇪 **Belgium** (7) | 🇳🇱 **Netherlands** (7) | 🇸🇪 **Sweden** (7) | 🇨🇭 **Switzerland** (7) |
+| ------------------ | ---------------------- | ----------------- | ---------------------- |
+| Brussels           | Amsterdam              | Stockholm         | Zurich                 |
+| Antwerp            | Rotterdam              | Gothenburg        | Geneva                 |
+| Ghent              | The Hague              | Malmö             | Basel                  |
+| Charleroi          | Utrecht                | Uppsala           | Lausanne               |
+| Liège              | Eindhoven              | Västerås          | Bern                   |
+| Bruges             | Tilburg                | Örebro            | Winterthur             |
+| Namur              | Groningen              | Linköping         | Lucerne                |
 
-| 🇬🇷 **Greece** (6) | 🇳🇱 **Netherlands** (7) | 🇳🇴 **Norway** (5) |
-| ----------------- | ---------------------- | ----------------- |
-| Athens            | Amsterdam              | Oslo              |
-| Thessaloniki      | Rotterdam              | Bergen            |
-| Patras            | The Hague              | Trondheim         |
-| Heraklion         | Utrecht                | Stavanger         |
-| Larissa           | Eindhoven              | Tromsø            |
-| Volos             | Tilburg                |                   |
-|                   | Groningen              |                   |
+| 🇦🇹 **Austria** (6) | 🇫🇮 **Finland** (6) | 🇵🇹 **Portugal** (6) | 🇳🇴 **Norway** (5) |
+| ------------------ | ------------------ | ------------------- | ----------------- |
+| Vienna             | Helsinki           | Lisbon              | Oslo              |
+| Graz               | Espoo              | Porto               | Bergen            |
+| Linz               | Tampere            | Vila Nova de Gaia   | Trondheim         |
+| Salzburg           | Vantaa             | Amadora             | Stavanger         |
+| Innsbruck          | Oulu               | Braga               | Tromsø            |
+| Klagenfurt         | Turku              | Coimbra             |                   |
 
-| 🇵🇹 **Portugal** (6) | 🇸🇪 **Sweden** (7) | 🇨🇭 **Switzerland** (7) |
-| ------------------- | ----------------- | ---------------------- |
-| Lisbon              | Stockholm         | Zurich                 |
-| Porto               | Gothenburg        | Geneva                 |
-| Vila Nova de Gaia   | Malmö             | Basel                  |
-| Amadora             | Uppsala           | Lausanne               |
-| Braga               | Västerås          | Bern                   |
-| Coimbra             | Örebro            | Winterthur             |
-|                     | Linköping         | Lucerne                |
+| 🇩🇰 **Denmark** (1) | 🇬🇷 **Greece** (2) |
+| ------------------ | ----------------- |
+| Copenhagen         | Volos             |
+|                    | Thessaloniki      |
+
 
 # **Input Tensor Construction**
 
