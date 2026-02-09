@@ -412,7 +412,7 @@ def train(
         optimizer,
         mode='min',
         factor=0.5,
-        patience=5,
+        patience=5
     )
 
     print(f"\nOptimizer: Adam (lr={learning_rate}, wd={weight_decay})")
@@ -486,7 +486,14 @@ def train(
             device, epoch, writer, model_type=model_type
         )
 
+        # Learning rate scheduling
+        old_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_metrics['loss'])
+        new_lr = optimizer.param_groups[0]['lr']
+        
+        if old_lr != new_lr:
+            print(f"\n📉 Learning Rate reduced: {old_lr:.2e} → {new_lr:.2e}")
+
 
         epoch_time = time.time() - epoch_start_time
 
