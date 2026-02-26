@@ -12,6 +12,7 @@
    - [Cities](#cities)
    - [Input Features](#input-features)
    - [Target Labels](#target-labels)
+   - [Dataset Split](#dataset-split)
 4. [Models](#models)
    - [Architectures](#architectures)
    - [Results](#results)
@@ -138,6 +139,38 @@ Points are generated via K-Means clustering (5 clusters per city based on road/b
     </td>
   </tr>
 </table>
+
+### Dataset Split
+
+The 80 cities are divided into **train / val / test** at the city level — no city appears in more than one split. A city-level split is essential here: samples within the same city share the same satellite image tile, the same seasonal lighting conditions, and the same local OSM data distribution, so a sample-level split would cause severe data leakage and over-optimistic evaluation.
+
+The split is **fixed and deterministic**, stored in `ablation/data/city_split.json` and never resampled between runs. The proportions are 70 / 15 / 15 (56 / 12 / 12 cities), targeting roughly equal sample counts in val and test.
+
+#### Why a stratified split rather than a random one?
+
+A naive random shuffle of 80 cities risks creating imbalanced splits along several axes that strongly affect population density — and therefore model difficulty. The split was designed to be balanced across three dimensions:
+
+**1. Geographic balance (country representation)**
+
+Each country with four or more cities contributes at least one city to val and one to test, so every national urban style (e.g. compact French city centres, sprawling Finnish suburbs, dense Italian historic cores) is present in all three sets. Countries with three or fewer cities (Denmark, Greece) have too little data to spare and are kept entirely in train.
+
+**2. Density balance (population quantiles)**
+
+Within each country, val and test cities are picked at different positions along the average-population distribution — one city from the lower half and one from the upper half. This prevents both val and test from being dominated by either low-density or high-density cities, and ensures the model is evaluated across the full range of population levels it will encounter in deployment.
+
+**3. Urban-fabric balance (K-Means cluster coverage)**
+
+Each sample is assigned to one of five K-Means clusters (0–4) that capture distinct urban fabrics, from sparse residential outskirts (cluster 0) to dense mixed-use cores (cluster 4). The split algorithm verifies that all five cluster types are represented in both val and test, so evaluation is not biased toward any single urban morphology.
+
+#### Final split
+
+| Split | Cities | Samples |
+|:------|-------:|--------:|
+| Train | 56 | 26,078 |
+| Val | 12 | 5,603 |
+| Test | 12 | 5,320 |
+
+Two cities — Edinburgh and Copenhagen — have corrupted population data (recorded average population of 0) and are always assigned to train to avoid polluting the evaluation sets.
 
 ---
 
