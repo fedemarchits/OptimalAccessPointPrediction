@@ -46,35 +46,52 @@ from pathlib import Path
 
 # ── Experiment registry ───────────────────────────────────────────────────────
 #   (run_name, training_script, model_type, backbone)
+# EXPERIMENTS = [
+#     # ── DINOv2 (self-supervised ViT-B/14 — primary CV contribution) ──────────
+#     # ("rgb_only_dinov2_vitb14",    "scripts/train_rgb_only_dinov2.py",           "single",    "dinov2_vitb14_rgb"),
+#     # ("single_dinov2_vitb14",      "scripts/train_single_dinov2.py",             "single",    "dinov2_vitb14"),
+#     ("dual_dinov2_vitb14",      "scripts/train_dual_dinov2.py",             "dual",    "dinov2_vitb14"),
+#     # ("dann_dinov2_vitb14",        "scripts/train_dann_dinov2.py",               "dann",      "dinov2_vitb14"),
+
+#     # ── No image ──────────────────────────────────────────────────────────────
+#     # ("tabular_only",              "scripts/train_tabular_only.py",              "tabular",   "none"),
+
+#     # ── Single branch (image only, no tabular) ────────────────────────────────
+#     # ("rgb_only_efficientnet_b3",  "scripts/train_rgb_only_efficientnet.py",     "single",    "efficientnet_b3_rgb"),
+#     ("single_resnet50",           "scripts/train_single_resnet50.py",           "single",    "resnet50"),
+#     ("single_efficientnet_b3",    "scripts/train_single_efficientnet.py",       "single",    "efficientnet_b3"),
+#     # ("single_convnext_tiny",      "scripts/train_single_convnext.py",           "single",    "convnext_tiny"),
+
+#     # ── Dual branch (image + tabular, simple concat) ──────────────────────────
+#     ("dual_resnet50",             "scripts/train_dual_resnet50.py",             "dual",      "resnet50"),
+#     ("dual_efficientnet_b3",      "scripts/train_dual_efficientnet.py",         "dual",      "efficientnet_b3"),
+#     # ("dual_convnext_tiny",        "scripts/train_dual_convnext.py",             "dual",      "convnext_tiny"),
+
+#     # ── Dual branch — advanced fusion ─────────────────────────────────────────
+#     ("film_efficientnet_b3",      "scripts/train_film_efficientnet.py",         "film",      "efficientnet_b3"),
+#     # ("crossattn_efficientnet_b3", "scripts/train_crossattn_efficientnet.py",    "crossattn", "efficientnet_b3"),
+#     ("crossattn_convnext_tiny",   "scripts/train_crossattn_convnext.py",        "crossattn", "convnext_tiny"),
+
+#     # ── Domain adaptation ─────────────────────────────────────────────────────
+#     ("dann_efficientnet_b3",      "scripts/train_dann.py",                      "dann",      "efficientnet_b3"),
+#     ("dann_convnext_tiny",        "scripts/train_dann_convnext.py",             "dann",      "convnext_tiny"),
+# ]
+
 EXPERIMENTS = [
-    # ── DINOv2 (self-supervised ViT-B/14 — primary CV contribution) ──────────
-    ("rgb_only_dinov2_vitb14",    "scripts/train_rgb_only_dinov2.py",           "single",    "dinov2_vitb14_rgb"),
-    ("single_dinov2_vitb14",      "scripts/train_single_dinov2.py",             "single",    "dinov2_vitb14"),
-    ("dann_dinov2_vitb14",        "scripts/train_dann_dinov2.py",               "dann",      "dinov2_vitb14"),
+    
+    ("single_resnet50",           "scripts/train_single_resnet50.py",           "single",    "resnet50"),
+    ("single_efficientnet_b3",    "scripts/train_single_efficientnet.py",       "single",    "efficientnet_b3"),
+    ("dual_dinov2_vitb14",      "scripts/train_dual_dinov2.py",             "dual",    "dinov2_vitb14"),
+    
+    # ("dual_resnet50",             "scripts/train_dual_resnet50.py",             "dual",      "resnet50"),
+    # ("dual_efficientnet_b3",      "scripts/train_dual_efficientnet.py",         "dual",      "efficientnet_b3"),
+    
+    # ("film_efficientnet_b3",      "scripts/train_film_efficientnet.py",         "film",      "efficientnet_b3"),
+    
+    # ("crossattn_convnext_tiny",   "scripts/train_crossattn_convnext.py",        "crossattn", "convnext_tiny"),
 
-    # ── No image ──────────────────────────────────────────────────────────────
-    #("tabular_only",              "scripts/train_tabular_only.py",              "tabular",   "none"),
-
-    # ── Single branch (image only, no tabular) ────────────────────────────────
-    ("rgb_only_efficientnet_b3",  "scripts/train_rgb_only_efficientnet.py",     "single",    "efficientnet_b3_rgb"),
-    #("single_resnet50",           "scripts/train_single_resnet50.py",           "single",    "resnet50"),
-    #("single_efficientnet_b3",    "scripts/train_single_efficientnet.py",       "single",    "efficientnet_b3"),
-    ("single_convnext_tiny",      "scripts/train_single_convnext.py",           "single",    "convnext_tiny"),
-
-    # ── Dual branch (image + tabular, simple concat) ──────────────────────────
-    #("dual_resnet50",             "scripts/train_dual_resnet50.py",             "dual",      "resnet50"),
-    #("dual_efficientnet_b3",      "scripts/train_dual_efficientnet.py",         "dual",      "efficientnet_b3"),
-    ("dual_convnext_tiny",        "scripts/train_dual_convnext.py",             "dual",      "convnext_tiny"),
-
-    # ── Dual branch — advanced fusion ─────────────────────────────────────────
-    #("film_efficientnet_b3",      "scripts/train_film_efficientnet.py",         "film",      "efficientnet_b3"),
-    ("crossattn_efficientnet_b3", "scripts/train_crossattn_efficientnet.py",    "crossattn", "efficientnet_b3"),
-    #("crossattn_convnext_tiny",   "scripts/train_crossattn_convnext.py",        "crossattn", "convnext_tiny"),
-    #("multitask_convnext_tiny",   "scripts/train_multitask_convnext.py",        "multitask", "convnext_tiny"),
-
-    # ── Domain adaptation ─────────────────────────────────────────────────────
-    ("dann_efficientnet_b3",      "scripts/train_dann.py",                      "dann",      "efficientnet_b3"),
-    ("dann_convnext_tiny",        "scripts/train_dann_convnext.py",             "dann",      "convnext_tiny"),
+    # ("dann_efficientnet_b3",      "scripts/train_dann.py",                      "dann",      "efficientnet_b3"),
+    # ("dann_convnext_tiny",        "scripts/train_dann_convnext.py",             "dann",      "convnext_tiny"),
 ]
 
 HEATMAP_CITY = "Bologna, Italy"

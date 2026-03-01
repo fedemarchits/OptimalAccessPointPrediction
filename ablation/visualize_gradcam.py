@@ -102,16 +102,74 @@ def _gradcam_target(model):
         return bb.backbone              # timm CNN with global_pool="" → 4D
 
 
-# ── Core GradCAM ──────────────────────────────────────────────────────────────
+# ── ViT gradient saliency (DINOv2) ────────────────────────────────────────────
 
-def gradcam(model, image, tabular, model_type, device):
+def _vit_gradient_saliency(model, image, tabular, model_type, device):
     """
-    Compute GradCAM for a single (1-sample) batch.
+    For DINOv2/ViT backbones: gradient of the final prediction w.r.t. the
+    input image pixels.
+
+    Unlike CLS attention (which reflects DINOv2's pretrained priors on natural
+    photos), this directly measures which pixels causally affect the walkability
+    prediction through the full finetuned model, including the fusion head.
 
     Returns:
         cam   np.ndarray (224, 224) in [0, 1]
         pred  float — raw (log-space) prediction
     """
+    model.eval()
+    img = image.unsqueeze(0).to(device).requires_grad_(True)
+    tab = tabular.unsqueeze(0).to(device)
+
+    model.zero_grad()
+    if model_type == "single":
+        pred = model(img)
+    elif model_type == "dann":
+        pred, _ = model(img, tab, 0.0)
+    else:
+        pred = model(img, tab)
+
+    pred.squeeze().backward()
+
+    # Max over channels → (H, W) saliency map
+    sal = img.grad[0].abs().max(dim=0)[0]   # (H, W) or (224, 224) already
+    sal = sal.detach().cpu().float()
+
+    # Smooth slightly to reduce pixel-level noise
+    sal = F.avg_pool2d(sal.unsqueeze(0).unsqueeze(0),
+                       kernel_size=11, stride=1, padding=5).squeeze()
+
+    sal = sal.numpy()
+    sal = (sal - sal.min()) / (sal.max() - sal.min() + 1e-8)
+
+    # Resize to 224×224 in case crop was different
+    sal = F.interpolate(
+        torch.tensor(sal).unsqueeze(0).unsqueeze(0),
+        size=(224, 224), mode="bilinear", align_corners=False,
+    ).squeeze().numpy()
+
+    return sal, float(pred.squeeze().item())
+
+
+# ── Core GradCAM ──────────────────────────────────────────────────────────────
+
+def gradcam(model, image, tabular, model_type, device):
+    """
+    Compute GradCAM for a single (1-sample) batch.
+    For DINOv2/ViT backbones, uses CLS attention map instead (GradCAM
+    produces uniform maps for transformers due to gradient averaging).
+
+    Returns:
+        cam   np.ndarray (224, 224) in [0, 1]
+        pred  float — raw (log-space) prediction
+    """
+    # ViT backbones: use gradient saliency instead of GradCAM.
+    # CLS attention reflects DINOv2's pretrained priors (not finetuned for
+    # walkability), so it localises to visually salient regions unrelated to
+    # the prediction.  Gradient saliency propagates through the full model.
+    if "DINOv2" in type(model.backbone).__name__:
+        return _vit_gradient_saliency(model, image, tabular, model_type, device)
+
     model.eval()
     image   = image.unsqueeze(0).to(device)
     tabular = tabular.unsqueeze(0).to(device)
@@ -142,18 +200,8 @@ def gradcam(model, image, tabular, model_type, device):
         pred = pred.squeeze()
         pred.backward()
 
-        acts  = acts_buf[0]   # CNN: (1, C, H, W)  |  ViT: (1, N, D)
-        grads = grads_buf[0]  # CNN: (1, C, H, W)  |  ViT: (1, N, D)
-
-        # ViT (DINOv2): reshape patch tokens → (1, D, 16, 16) spatial map
-        if acts.ndim == 3:
-            n_prefix = model.backbone.backbone.num_prefix_tokens  # 1 (CLS)
-            acts  = acts[:,  n_prefix:, :]   # (1, 256, D)
-            grads = grads[:, n_prefix:, :]   # (1, 256, D)
-            B, N, D = acts.shape
-            H = W = int(N ** 0.5)            # 16
-            acts  = acts.permute(0, 2, 1).reshape(B, D, H, W)
-            grads = grads.permute(0, 2, 1).reshape(B, D, H, W)
+        acts  = acts_buf[0]   # (1, C, H, W)
+        grads = grads_buf[0]  # (1, C, H, W)
 
         # GAP the gradients → channel weights
         w   = grads.mean(dim=[2, 3], keepdim=True)         # (1, C, 1, 1)
@@ -183,10 +231,10 @@ def _overlay(rgb, cam, alpha=0.45):
     return np.clip((1 - alpha) * rgb + alpha * heatmap, 0, 1)
 
 
-def _plot_grid(samples, out_path, title):
+def _plot_grid(samples, out_path, title, cam_label="Attention Map"):
     """
     samples: list of dicts {rgb, cam, pred, target, country, cluster}
-    Columns: original | GradCAM | overlay
+    Columns: original | cam_label | overlay
     """
     n = len(samples)
     fig, axes = plt.subplots(n, 3, figsize=(13, 4.2 * n))
@@ -205,7 +253,7 @@ def _plot_grid(samples, out_path, title):
         axes[i, 0].axis("off")
 
         im = axes[i, 1].imshow(cam, cmap="jet", vmin=0, vmax=1)
-        axes[i, 1].set_title("GradCAM", fontsize=9)
+        axes[i, 1].set_title(cam_label, fontsize=9)
         axes[i, 1].axis("off")
         plt.colorbar(im, ax=axes[i, 1], fraction=0.046, pad=0.04)
 
@@ -312,20 +360,27 @@ def main():
             "cluster": int(item["metadata"]["cluster"]),
         }
 
-    print(f"GradCAM for {k} best predictions...")
+    is_vit    = "DINOv2" in type(model.backbone).__name__
+    cam_label = "Gradient Saliency" if is_vit else "GradCAM"
+    tag       = "Saliency" if is_vit else "GradCAM"
+
+    print(f"{tag} for {k} best predictions...")
     _plot_grid([_sample(i) for i in tqdm(sel_best, leave=False)],
                out_dir / "best_predictions.png",
-               f"GradCAM — Best Predictions  [{args.run}]")
+               f"{tag} — Best Predictions  [{args.run}]",
+               cam_label=cam_label)
 
-    print(f"GradCAM for {k} worst predictions...")
+    print(f"{tag} for {k} worst predictions...")
     _plot_grid([_sample(i) for i in tqdm(sel_worst, leave=False)],
                out_dir / "worst_predictions.png",
-               f"GradCAM — Worst Predictions  [{args.run}]")
+               f"{tag} — Worst Predictions  [{args.run}]",
+               cam_label=cam_label)
 
-    print(f"GradCAM for {k} random samples...")
+    print(f"{tag} for {k} random samples...")
     _plot_grid([_sample(i) for i in tqdm(sel_random, leave=False)],
                out_dir / "random_samples.png",
-               f"GradCAM — Random Samples  [{args.run}]")
+               f"{tag} — Random Samples  [{args.run}]",
+               cam_label=cam_label)
 
     # ── Average CAM: high vs low population ──────────────────────────────
     q75, q25 = np.percentile(targets, 75), np.percentile(targets, 25)
@@ -335,7 +390,7 @@ def main():
     hi_sel   = rng.choice(hi_pool, n_avg, replace=False)
     lo_sel   = rng.choice(lo_pool, n_avg, replace=False)
 
-    print(f"Average GradCAM (n={n_avg} each)...")
+    print(f"Average {tag} (n={n_avg} each)...")
     hi_cams = [gradcam(model, test_ds[i]["image"], test_ds[i]["tabular"],
                        args.model, device)[0]
                for i in tqdm(hi_sel, desc="High-pop", leave=False)]
@@ -344,7 +399,7 @@ def main():
                for i in tqdm(lo_sel, desc="Low-pop",  leave=False)]
     _plot_avg(hi_cams, lo_cams, out_dir / "average_high_vs_low.png")
 
-    print(f"\nGradCAM done → {out_dir}/")
+    print(f"\n{tag} done → {out_dir}/")
 
 
 if __name__ == "__main__":
