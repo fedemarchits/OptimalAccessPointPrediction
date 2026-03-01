@@ -485,63 +485,121 @@ def plot_attention_map(
     n_patches: int = 5,
 ):
     """
-    Render cross-attention maps for n_patches samples spread across the
-    population distribution (10/30/50/70/90 percentile).
-    Each row: RGB crop | attention grid | overlay.
+    Render cross-attention maps for n_patches spatially-distinct samples.
+
+    Samples are selected so they span the full population distribution AND
+    are at least crop_size pixels apart in raster space (no duplicate crops).
+    Each patch is saved as a separate PNG:  <stem>_patch1.png … _patch5.png
     """
     from models.dual_branch import CrossAttnDualBranch
     if not isinstance(model, CrossAttnDualBranch):
         print("  Attention map only available for CrossAttnDualBranch — skipping.")
         return
 
-    print(f"  Extracting cross-attention maps for {n_patches} patches…")
+    print(f"  Extracting cross-attention maps for {n_patches} distinct patches…")
 
-    # Pick samples at evenly-spaced population percentiles
-    pops    = np.array([s["population_15min_walk"] for s in samples])
-    order   = np.argsort(pops)
-    picks   = np.linspace(0, len(order) - 1, n_patches, dtype=int)
-    chosen  = [samples[order[p]] for p in picks]
+    # Sort by population, then walk through candidates ensuring spatial diversity.
+    # We try many more candidates than needed so we can reject near-duplicates.
+    pops  = np.array([s["population_15min_walk"] for s in samples])
+    order = np.argsort(pops)          # ascending pop order
+    # Spread n_patches "target" percentile slots evenly across the sorted list
+    target_ranks = np.linspace(0, len(order) - 1, n_patches, dtype=int)
 
-    rows = []
-    for s in chosen:
-        res = _attention_for_sample(model, src_rgb, src_dem, src_lu,
-                                    s, tab_mean, tab_std,
-                                    city_log_mean, city_log_std,
-                                    device, crop_size)
-        if res is not None:
-            rows.append(res)
+    # Build candidate list: for each target rank, take a window of ±5 % of
+    # the sorted list so we have alternatives if the first choice fails or
+    # is too close to an already-chosen crop.
+    half_window = max(1, len(order) // 20)
+    candidate_indices = []   # indices into samples[]
+    for rank in target_ranks:
+        lo = max(0, rank - half_window)
+        hi = min(len(order) - 1, rank + half_window)
+        # put the exact rank first, then spread alternately around it
+        window = [rank]
+        for d in range(1, hi - lo + 1):
+            if rank - d >= lo:
+                window.append(rank - d)
+            if rank + d <= hi:
+                window.append(rank + d)
+        candidate_indices.append([int(order[r]) for r in window])
 
-    if not rows:
+    # Greedily pick one sample per slot, ensuring crops don't overlap
+    chosen_results = []          # list of (result_tuple, sample)
+    used_raster_positions = []   # list of (row, col) already committed
+
+    def _raster_pos(s):
+        """Return (row, col) of sample centre in the raster, or None on failure."""
+        sp  = s.get("start_point", {})
+        lat = sp.get("lat") or s.get("lat", 0.)
+        lon = sp.get("lng") or sp.get("lon") or s.get("lon", s.get("lng", 0.))
+        try:
+            row, col = src_rgb.index(float(lon), float(lat))
+            return int(row), int(col)
+        except Exception:
+            return None
+
+    for slot_candidates in candidate_indices:
+        for idx in slot_candidates:
+            s = samples[idx]
+            pos = _raster_pos(s)
+            if pos is None:
+                continue
+            # Reject if too close to an already-chosen crop
+            too_close = any(
+                abs(pos[0] - p[0]) < crop_size and abs(pos[1] - p[1]) < crop_size
+                for p in used_raster_positions
+            )
+            if too_close:
+                continue
+            res = _attention_for_sample(model, src_rgb, src_dem, src_lu,
+                                        s, tab_mean, tab_std,
+                                        city_log_mean, city_log_std,
+                                        device, crop_size)
+            if res is not None:
+                chosen_results.append((res, s))
+                used_raster_positions.append(pos)
+                break   # got a good sample for this slot
+
+    if not chosen_results:
         print("  Could not capture attention weights for any sample — skipping.")
         return
 
-    n = len(rows)
-    fig, axes = plt.subplots(n, 3, figsize=(18, 5.5 * n))
-    if n == 1:
-        axes = axes[np.newaxis, :]
-    fig.suptitle(f"Cross-attention maps — {chosen[0]['city']}", fontsize=14, fontweight="bold")
+    # Save each patch as a separate image
+    city_name = chosen_results[0][1].get("city", "city")
+    stem = out_path.with_suffix("")   # strip .png → use as prefix
 
-    for i, (rgb_disp, attn_map, attn_up, gt_pop, pred_pop, lat, lon, H_feat, W_feat) in enumerate(rows):
-        axes[i, 0].imshow(rgb_disp)
-        axes[i, 0].set_title(f"RGB crop  ({lat:.4f}, {lon:.4f})\nGT: {gt_pop:,.0f}", fontsize=10)
-        axes[i, 0].axis("off")
+    for i, (res, s) in enumerate(chosen_results, start=1):
+        rgb_disp, attn_map, attn_up, gt_pop, pred_pop, lat, lon, H_feat, W_feat = res
 
-        im = axes[i, 1].imshow(attn_map, cmap="hot", interpolation="nearest")
-        plt.colorbar(im, ax=axes[i, 1], fraction=0.046)
-        axes[i, 1].set_title(f"Cross-attention  ({H_feat}×{W_feat})", fontsize=10)
-        axes[i, 1].set_xlabel("Column patch")
-        axes[i, 1].set_ylabel("Row patch")
+        fig, axes = plt.subplots(1, 3, figsize=(18, 5.5))
+        fig.suptitle(
+            f"Cross-attention — {city_name}  |  patch {i}/{len(chosen_results)}  "
+            f"|  GT pop: {gt_pop:,.0f}",
+            fontsize=13, fontweight="bold",
+        )
 
-        axes[i, 2].imshow(rgb_disp)
-        ov = axes[i, 2].imshow(attn_up, cmap="hot", alpha=0.55)
-        plt.colorbar(ov, ax=axes[i, 2], fraction=0.046, label="Attention")
-        axes[i, 2].set_title(f"Overlay  |  Pred: {pred_pop:,.0f}", fontsize=10)
-        axes[i, 2].axis("off")
+        axes[0].imshow(rgb_disp)
+        axes[0].set_title(f"RGB crop  ({lat:.4f}, {lon:.4f})", fontsize=10)
+        axes[0].axis("off")
 
-    plt.tight_layout()
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved → {out_path}")
+        im = axes[1].imshow(attn_map, cmap="hot", interpolation="nearest")
+        plt.colorbar(im, ax=axes[1], fraction=0.046)
+        axes[1].set_title(f"Cross-attention  ({H_feat}×{W_feat})", fontsize=10)
+        axes[1].set_xlabel("Column patch")
+        axes[1].set_ylabel("Row patch")
+
+        axes[2].imshow(rgb_disp)
+        ov = axes[2].imshow(attn_up, cmap="hot", alpha=0.55)
+        plt.colorbar(ov, ax=axes[2], fraction=0.046, label="Attention")
+        axes[2].set_title(f"Overlay  |  Pred: {pred_pop:,.0f}", fontsize=10)
+        axes[2].axis("off")
+
+        plt.tight_layout()
+        patch_path = Path(f"{stem}_patch{i}.png")
+        fig.savefig(patch_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Saved patch {i} → {patch_path}")
+
+    print(f"  Saved {len(chosen_results)} attention patch images.")
 
 
 # ── Main ───────────────────────────────────────────────────────────────────

@@ -3,14 +3,23 @@ Run visualize.py for every model in outputs3, for two cities:
   - Bologna, Italy  (training city — familiar reference)
   - Milan, Italy    (test city — fair evaluation)
 
-Cross-attention models produce a 5-patch attention figure.
+Cross-attention models produce 5 separate attention-patch images.
 tabular_only is skipped (no image branch).
 
 Usage:
     cd ablation/
+
+    # Full run (heatmaps + attention)
     python run_all_visualize.py
+
+    # Attention maps only — much faster, skips sliding-window heatmap
+    python run_all_visualize.py --attention-only
+
+    # Only cross-attention model
+    python run_all_visualize.py --attention-only --model crossattn_efficientnet_b3
 """
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -45,10 +54,9 @@ STRIDE = "56"
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
-def run(run_name, model_type, backbone, city):
+def run(run_name, model_type, backbone, city, no_heatmap=False):
     ckpt    = str(OUTPUTS_DIR / run_name / "best_model.pth")
     out_dir = str(OUTPUTS_DIR / run_name / "visualizations")
-    city_slug = city.replace(", ", "_").replace(" ", "_")
 
     print(f"\n{'='*65}")
     print(f"  {run_name}  |  {city}")
@@ -67,17 +75,34 @@ def run(run_name, model_type, backbone, city):
         "--stride",     STRIDE,
         "--out",        out_dir,
     ]
+    if no_heatmap:
+        cmd.append("--no-heatmap")
+
     result = subprocess.run(cmd, cwd=str(BASE_DIR))
     if result.returncode != 0:
         print(f"  !! FAILED: {run_name} / {city}")
 
 
 if __name__ == "__main__":
-    total = len(MODELS) * len(CITIES)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--attention-only", action="store_true",
+                        help="Skip heatmaps — only regenerate attention maps (fast)")
+    parser.add_argument("--model", default=None,
+                        help="Run only this model key (e.g. crossattn_efficientnet_b3)")
+    args = parser.parse_args()
+
+    models = MODELS
+    if args.model:
+        if args.model not in MODELS:
+            print(f"Unknown model '{args.model}'. Available: {list(MODELS)}")
+            sys.exit(1)
+        models = {args.model: MODELS[args.model]}
+
+    total = len(models) * len(CITIES)
     done  = 0
-    for run_name, (model_type, backbone) in MODELS.items():
+    for run_name, (model_type, backbone) in models.items():
         for city in CITIES:
-            run(run_name, model_type, backbone, city)
+            run(run_name, model_type, backbone, city, no_heatmap=args.attention_only)
             done += 1
             print(f"\n[{done}/{total} done]")
 

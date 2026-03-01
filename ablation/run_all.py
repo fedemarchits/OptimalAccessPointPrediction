@@ -1,29 +1,17 @@
 """
-run_all.py — Train selected ablation models and generate all visualizations.
+run_all.py — Train selected ablation models and evaluate on the test set.
 
 For each model this script runs, in order:
-  1. Training          (skipped if checkpoint already exists, unless --force-retrain)
-  2. Bologna heatmap   (visualize.py  — ground-truth + prediction heatmap)
-  3. UMAP analysis     (visualize_umap.py — feature-space coloured by country / population / cluster)
+  1. Training   (skipped if checkpoint already exists, unless --force-retrain)
 
 At the end a summary table of all test results is written to outputs/summary/.
 
-Everything you need to download is inside outputs/:
-  outputs/{run}/best_model.pth        ← trained weights
-  outputs/{run}/test_results.json     ← MAE, RMSE, R²
-  outputs/{run}/history.json          ← train/val curves
-  outputs/{run}/heatmap/              ← Bologna ground-truth + prediction heatmap
-  outputs/{run}/umap/                 ← UMAP plots + metrics.json
-  outputs/{run}/logs/                 ← stdout logs for each step
-  outputs/summary/                    ← comparison table across all models
-
-Current run set:
-  - rgb_only_efficientnet_b3 (ablation: EfficientNet on RGB only — no DEM/LandUse)
-  - single_resnet50 / single_efficientnet_b3 / single_convnext_tiny  (re-run with BN)
-  - dann_efficientnet_b3    (tuned: max_lambda=0.3, patience=12)
-  - dann_convnext_tiny      (DANN on best backbone)
-  - crossattn_convnext_tiny (cross-attention on best backbone)
-  - multitask_convnext_tiny (new: collaborative cluster-prediction auxiliary task)
+Outputs per run:
+  outputs/{run}/best_model.pth     ← trained weights
+  outputs/{run}/test_results.json  ← MAE, RMSE, R²
+  outputs/{run}/history.json       ← train/val loss curves
+  outputs/{run}/logs/train.log     ← full stdout log
+  outputs/summary/                 ← comparison table across all models
 
 Usage:
     python run_all.py \\
@@ -31,7 +19,7 @@ Usage:
         --json  /workspace/PopulationDataset/final_clustered_samples.json \\
         --base  /workspace/PopulationDataset
 
-    # To re-train models that already have a checkpoint:
+    # Re-train even if a checkpoint already exists:
     python run_all.py ... --force-retrain
 """
 
@@ -93,8 +81,6 @@ EXPERIMENTS = [
     # ("dann_efficientnet_b3",      "scripts/train_dann.py",                      "dann",      "efficientnet_b3"),
     # ("dann_convnext_tiny",        "scripts/train_dann_convnext.py",             "dann",      "convnext_tiny"),
 ]
-
-HEATMAP_CITY = "Bologna, Italy"
 
 
 # ── Subprocess runner ─────────────────────────────────────────────────────────
@@ -182,21 +168,14 @@ def build_summary(output_dir: Path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train all ablation models and generate all visualizations."
+        description="Train all ablation models and evaluate on the test set."
     )
     parser.add_argument("--cache",         required=True,  help="Path to preprocessed cache dir")
     parser.add_argument("--json",          required=True,  help="Path to final_clustered_samples.json")
-    parser.add_argument("--base",          required=True,  help="Base dataset dir (satellite_images/ etc.)")
+    parser.add_argument("--base",          required=True,  help="Base dataset dir")
     parser.add_argument("--output-dir",    default="outputs", help="Root output directory (default: outputs)")
-    parser.add_argument("--city",          default=HEATMAP_CITY, help="City for heatmap generation")
-    parser.add_argument("--stride",        type=int, default=56, help="Heatmap sliding window stride (default: 56)")
     parser.add_argument("--force-retrain", action="store_true",
                         help="Re-train even if checkpoint already exists")
-    parser.add_argument("--skip-umap",          action="store_true", help="Skip UMAP visualization")
-    parser.add_argument("--skip-heatmap",        action="store_true", help="Skip heatmap generation")
-    parser.add_argument("--skip-gradcam",        action="store_true", help="Skip GradCAM visualization")
-    parser.add_argument("--skip-shap",           action="store_true", help="Skip tabular SHAP analysis")
-    parser.add_argument("--skip-country-errors", action="store_true", help="Skip per-country error analysis")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -225,93 +204,18 @@ def main():
                 f"Training {run_name}",
             )
             if not ok:
-                print(f"  Training FAILED for {run_name} — skipping visualizations.")
+                print(f"  Training FAILED for {run_name} — skipping evaluation.")
                 failed.append(run_name)
                 continue
 
         if not ckpt.exists():
-            print(f"  No checkpoint at {ckpt} — skipping visualizations.")
+            print(f"  No checkpoint at {ckpt} — skipping evaluation.")
             failed.append(run_name)
             continue
 
-        # ── 2. Bologna heatmap ───────────────────────────────────────────────
-        if not args.skip_heatmap and model_type != "tabular":
-            heatmap_dir = run_dir / "heatmap"
-            run_step(
-                [
-                    py, "visualize.py",
-                    "--city",       args.city,
-                    "--checkpoint", str(ckpt),
-                    "--model",      model_type,
-                    "--backbone",   backbone,
-                    "--json",       args.json,
-                    "--base",       args.base,
-                    "--cache",      args.cache,
-                    "--out",        str(heatmap_dir),
-                    "--stride",     str(args.stride),
-                ],
-                log_dir / "heatmap.log",
-                f"Heatmap for {run_name}",
-            )
-
-        # ── 3. UMAP ──────────────────────────────────────────────────────────
-        if not args.skip_umap and model_type != "tabular":
-            run_step(
-                [
-                    py, "visualize_umap.py",
-                    "--cache",    args.cache,
-                    "--run",      run_name,
-                    "--model",    model_type,
-                    "--backbone", backbone,
-                ],
-                log_dir / "umap.log",
-                f"UMAP for {run_name}",
-            )
-
-        # ── 4. GradCAM ───────────────────────────────────────────────────────
-        if not args.skip_gradcam and model_type != "tabular":
-            run_step(
-                [
-                    py, "visualize_gradcam.py",
-                    "--cache",    args.cache,
-                    "--run",      run_name,
-                    "--model",    model_type,
-                    "--backbone", backbone,
-                ],
-                log_dir / "gradcam.log",
-                f"GradCAM for {run_name}",
-            )
-
-        # ── 5. Tabular SHAP (dual-branch models only) ─────────────────────
-        if not args.skip_shap and model_type not in ("single", "tabular"):
-            shap_cmd = [
-                py, "visualize_shap.py",
-                "--cache",    args.cache,
-                "--run",      run_name,
-                "--model",    model_type,
-                "--backbone", backbone,
-            ]
-            if args.json:
-                shap_cmd += ["--json", args.json]
-            run_step(shap_cmd, log_dir / "shap.log", f"SHAP for {run_name}")
-
-        # ── 6. Per-country error map ─────────────────────────────────────
-        if not args.skip_country_errors:
-            run_step(
-                [
-                    py, "visualize_country_errors.py",
-                    "--cache",    args.cache,
-                    "--run",      run_name,
-                    "--model",    model_type,
-                    "--backbone", backbone,
-                ],
-                log_dir / "country_errors.log",
-                f"Country errors for {run_name}",
-            )
-
         completed.append(run_name)
 
-    # ── 4. Summary ────────────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────────────
     build_summary(output_dir)
 
     # ── Final status ──────────────────────────────────────────────────────────
@@ -319,7 +223,7 @@ def main():
     print(f"  Completed ({len(completed)}): {', '.join(completed) or 'none'}")
     print(f"  Failed    ({len(failed)}):    {', '.join(failed) or 'none'}")
     print(f"  Train skipped (ckpt exists): {', '.join(skipped_train) or 'none'}")
-    print(f"\n  Download everything in:  {output_dir.resolve()}/")
+    print(f"\n  Outputs in:  {output_dir.resolve()}/")
     print(f"{'='*60}")
 
 
