@@ -1,4 +1,4 @@
-"""Ablation arm: single-branch ConvNeXt-Tiny (image only)."""
+"""Ablation arm: single-branch DINOv2 ViT-B/14 (image only, 12 channels)."""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -16,8 +16,10 @@ CACHE_DIR = "/workspace/PopulationDataset/cache"
 cfg = SingleBranchConfig(
     json_file=JSON_FILE,
     base_dir=BASE_DIR,
-    backbone="convnext_tiny",
-    wandb_name="single_convnext_tiny",
+    backbone="dinov2_vitb14",
+    wandb_name="single_dinov2_vitb14",
+    warmup_epochs=3,      # one extra warmup epoch — ViT-B is larger than CNNs
+    num_epochs=100,
     patience=5,
 )
 

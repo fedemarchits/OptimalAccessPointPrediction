@@ -114,18 +114,24 @@ def _extract_crop(src_rgb, src_dem, src_lu, lon, lat, crop_size=224):
     return rgb, np.concatenate([rgb, dem[None], lu_oh], axis=0)
 
 
-def _load_model(model_type: str, checkpoint: Path, device: str) -> nn.Module:
-    from configs import SingleBranchConfig, DualBranchConfig, FiLMConfig, CrossAttnConfig
+def _load_model(model_type: str, checkpoint: Path, device: str,
+                backbone: str = "efficientnet_b3") -> nn.Module:
+    from configs import SingleBranchConfig, DualBranchConfig, FiLMConfig, CrossAttnConfig, DANNConfig
     from models import build_model
 
     if model_type == "single":
-        cfg = SingleBranchConfig(backbone="efficientnet_b3")
+        cfg = SingleBranchConfig(backbone=backbone)
     elif model_type == "dual":
-        cfg = DualBranchConfig(backbone="efficientnet_b3")
+        cfg = DualBranchConfig(backbone=backbone)
     elif model_type == "film":
-        cfg = FiLMConfig(backbone="efficientnet_b3")
+        cfg = FiLMConfig(backbone=backbone)
+    elif model_type == "dann":
+        cfg = DANNConfig(backbone=backbone)
+    elif model_type == "multitask":
+        from configs import MultiTaskConfig
+        cfg = MultiTaskConfig(backbone=backbone)
     else:
-        cfg = CrossAttnConfig(backbone="efficientnet_b3")
+        cfg = CrossAttnConfig(backbone=backbone)
 
     model = build_model(cfg, device=device)
     ckpt  = torch.load(checkpoint, map_location=device, weights_only=False)
@@ -148,7 +154,12 @@ def plot_ground_truth(src_rgb, samples, city: str, out_path: Path):
     rgb_full = src_rgb.read([1,2,3], window=win,
                              out_shape=(3, h, w),
                              resampling=rasterio.enums.Resampling.bilinear)
-    rgb_full = np.clip(rgb_full.transpose(1,2,0) / 255., 0, 1)
+    # Percentile stretch handles any bit depth (uint8, uint16, float)
+    rgb_arr = rgb_full.astype(np.float32)
+    for c in range(3):
+        p2, p98 = np.percentile(rgb_arr[c], 2), np.percentile(rgb_arr[c], 98)
+        rgb_arr[c] = (rgb_arr[c] - p2) / (p98 - p2 + 1e-8)
+    rgb_full = np.clip(rgb_arr.transpose(1, 2, 0), 0, 1)
 
     # Convert sample coordinates to pixel space (downscaled)
     xs, ys, pops = [], [], []
@@ -219,6 +230,9 @@ def plot_prediction_heatmap(
                 out = model(x, t)
             else:
                 out = model(x)
+        # DANNDualBranch returns (pred, domain_logits) — take only the prediction
+        if isinstance(out, tuple):
+            out = out[0]
         log_preds = out.squeeze().cpu().numpy()
         return np.expm1(np.atleast_1d(log_preds))
 
@@ -269,7 +283,12 @@ def plot_prediction_heatmap(
     rgb_full = src_rgb.read([1,2,3],
                              out_shape=(3, ho, wo),
                              resampling=rasterio.enums.Resampling.bilinear)
-    rgb_full = np.clip(rgb_full.transpose(1,2,0) / 255., 0, 1)
+    # Percentile stretch handles any bit depth (uint8, uint16, float)
+    rgb_arr = rgb_full.astype(np.float32)
+    for c in range(3):
+        p2, p98 = np.percentile(rgb_arr[c], 2), np.percentile(rgb_arr[c], 98)
+        rgb_arr[c] = (rgb_arr[c] - p2) / (p98 - p2 + 1e-8)
+    rgb_full = np.clip(rgb_arr.transpose(1, 2, 0), 0, 1)
     pred_ds  = zoom(pred_full, (1/scale, 1/scale), order=1)
 
     fig, axes = plt.subplots(1, 2, figsize=(22, 10))
@@ -334,7 +353,9 @@ def plot_attention_map(
     t = torch.from_numpy(norm_f).float().unsqueeze(0).to(device)
 
     with torch.no_grad():
-        pred_log = model(x, t).item()
+        result = model(x, t)
+        # DANNDualBranch returns (pred, domain_logits)
+        pred_log = (result[0] if isinstance(result, tuple) else result).item()
     handle.remove()
 
     pred_pop = float(np.expm1(pred_log))
@@ -403,7 +424,9 @@ def main():
     parser.add_argument("--city",       required=True)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--model",      default="crossattn",
-                        choices=["single", "dual", "film", "crossattn"])
+                        choices=["single", "dual", "film", "crossattn", "dann", "multitask"])
+    parser.add_argument("--backbone",   default="efficientnet_b3",
+                        help="Backbone name (default: efficientnet_b3)")
     parser.add_argument("--json",       required=True)
     parser.add_argument("--base",       required=True)
     parser.add_argument("--out",        default="visualizations")
@@ -467,7 +490,7 @@ def main():
     print(f"TIF size: {src_rgb.width} × {src_rgb.height} px")
 
     # Load model
-    model = _load_model(args.model, Path(args.checkpoint), device)
+    model = _load_model(args.model, Path(args.checkpoint), device, backbone=args.backbone)
 
     # City-average tabular features for sliding window
     # Pipeline must match training: raw → log1p → z-score with training-split stats

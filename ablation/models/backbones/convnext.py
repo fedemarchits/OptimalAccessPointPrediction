@@ -67,5 +67,19 @@ class ConvNeXtTinyBackbone(MultiChannelBackbone):
             print("ConvNeXtTinyBackbone: backbone frozen")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Normalize RGB channels with ImageNet stats; DEM+LandUse left as-is
+        mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
+        std  = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
+        x = x.clone()
+        x[:, :3] = (x[:, :3] - mean) / std
         x = self.channel_attention(x)
         return self.pool(self.backbone(x))   # (B, 768)
+
+    def forward_spatial(self, x: torch.Tensor) -> torch.Tensor:
+        """Return spatial feature map (B, 768, H, W) before global pooling."""
+        mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
+        std  = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
+        x = x.clone()
+        x[:, :3] = (x[:, :3] - mean) / std
+        x = self.channel_attention(x)
+        return self.backbone(x)              # (B, 768, 7, 7) for 224×224 input

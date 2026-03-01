@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 from torchvision import models
+from torchvision.models import ResNet50_Weights
 
 from .base import MultiChannelBackbone, _init_12ch_conv
 
@@ -20,7 +21,8 @@ class ResNet50Backbone(MultiChannelBackbone):
     def __init__(self, pretrained: bool = True, freeze: bool = False):
         super().__init__()
 
-        net = models.resnet50(pretrained=pretrained)
+        weights = ResNet50_Weights.IMAGENET1K_V1 if pretrained else None
+        net = models.resnet50(weights=weights)
         orig_conv = net.conv1
 
         # Replace first conv: 3 → 12 input channels
@@ -41,4 +43,9 @@ class ResNet50Backbone(MultiChannelBackbone):
             print("ResNet50Backbone: backbone frozen")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Normalize RGB channels with ImageNet stats; DEM+LandUse left as-is
+        mean = torch.tensor([0.485, 0.456, 0.406], device=x.device).view(1, 3, 1, 1)
+        std  = torch.tensor([0.229, 0.224, 0.225], device=x.device).view(1, 3, 1, 1)
+        x = x.clone()
+        x[:, :3] = (x[:, :3] - mean) / std
         return self.features(x).flatten(1)   # (B, 2048)

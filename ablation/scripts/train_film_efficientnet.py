@@ -17,6 +17,7 @@ cfg = FiLMConfig(
     json_file=JSON_FILE,
     base_dir=BASE_DIR,
     wandb_name="film_efficientnet_b3",
+    patience=7,
 )
 
 device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")

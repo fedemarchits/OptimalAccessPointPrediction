@@ -12,13 +12,18 @@ from .backbones.base import MultiChannelBackbone
 
 
 class RegressionHead(nn.Module):
-    """Simple MLP that maps a flat feature vector to a scalar prediction."""
+    """MLP regression head matching the model2 EfficientNet architecture:
+    3 linear layers with BatchNorm at each intermediate layer for stable training."""
 
     def __init__(self, feat_dim: int):
         super().__init__()
         self.mlp = nn.Sequential(
+            nn.Linear(feat_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
             nn.Dropout(0.3),
-            nn.Linear(feat_dim, 256),
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(256, 1),

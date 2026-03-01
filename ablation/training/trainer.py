@@ -9,6 +9,7 @@ readable without requiring models to share an interface beyond nn.Module.
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
@@ -23,10 +24,16 @@ from tqdm import tqdm
 
 from models.dual_branch import DualBranchModel
 try:
-    from models.dual_branch import FiLMDualBranch, CrossAttnDualBranch
+    from models.dual_branch import FiLMDualBranch, CrossAttnDualBranch, DANNDualBranch, MultiTaskDualBranch
 except ImportError:
     FiLMDualBranch = None
     CrossAttnDualBranch = None
+    DANNDualBranch = None
+    MultiTaskDualBranch = None
+try:
+    from models.tabular_only import TabularOnlyModel
+except ImportError:
+    TabularOnlyModel = None
 from training.metrics import calculate_metrics
 
 try:
@@ -100,8 +107,17 @@ class Trainer:
             (DualBranchModel,)
             + ((FiLMDualBranch,)      if FiLMDualBranch      else ())
             + ((CrossAttnDualBranch,) if CrossAttnDualBranch else ())
+            + ((DANNDualBranch,)      if DANNDualBranch       else ())
         )
-        self._uses_tabular = isinstance(model, _dual_types)
+        self._uses_tabular_only = TabularOnlyModel is not None and isinstance(model, TabularOnlyModel)
+        self._uses_tabular   = isinstance(model, _dual_types)
+        self._uses_dann      = DANNDualBranch      is not None and isinstance(model, DANNDualBranch)
+        self._uses_multitask = MultiTaskDualBranch is not None and isinstance(model, MultiTaskDualBranch)
+
+        if self._uses_dann:
+            self.domain_criterion = nn.CrossEntropyLoss()
+        if self._uses_multitask:
+            self.cluster_criterion = nn.CrossEntropyLoss()
 
         # Output directory
         run_name       = getattr(config, "wandb_name", None) or "run"
@@ -111,13 +127,33 @@ class Trainer:
         tc = config
         # Loss, optimiser, scheduler
         self.criterion = nn.HuberLoss(delta=1.0)
-        self.optimizer = optim.AdamW(
-            model.parameters(),
-            lr=tc.learning_rate,
-            weight_decay=tc.weight_decay,
-        )
+
+        # Backbone warm-up + discriminative LRs
+        self._warmup_epochs = getattr(config, "warmup_epochs", 0)
+        self._has_backbone  = hasattr(model, "backbone") and not self._uses_tabular_only
+
+        if self._has_backbone and self._warmup_epochs > 0:
+            # Freeze backbone for warm-up phase
+            for p in model.backbone.parameters():
+                p.requires_grad = False
+            backbone_ids  = {id(p) for p in model.backbone.parameters()}
+            head_params   = [p for p in model.parameters() if id(p) not in backbone_ids]
+            backbone_params = list(model.backbone.parameters())
+            self.optimizer = optim.AdamW([
+                {"params": backbone_params, "lr": tc.learning_rate * 0.01},
+                {"params": head_params,     "lr": tc.learning_rate},
+            ], weight_decay=tc.weight_decay)
+            print(f"  Warm-up: backbone frozen for {self._warmup_epochs} epoch(s), "
+                  f"then backbone lr={tc.learning_rate*0.01:.2e} / head lr={tc.learning_rate:.2e}")
+        else:
+            self.optimizer = optim.AdamW(
+                model.parameters(),
+                lr=tc.learning_rate,
+                weight_decay=tc.weight_decay,
+            )
+
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer, mode="min", factor=0.5, patience=3, min_lr=1e-7
+            self.optimizer, mode="min", factor=0.5, patience=5, min_lr=1e-7
         )
         self.early_stopping = EarlyStopping(patience=tc.patience)
 
@@ -131,10 +167,10 @@ class Trainer:
                 project=tc.wandb_project,
                 name=run_name,
                 config={
-                    "backbone":       tc.backbone,
-                    "uses_tabular":   self._uses_tabular,
-                    "pretrained":     tc.pretrained,
-                    "freeze_backbone": tc.freeze_backbone,
+                    "backbone":        getattr(tc, "backbone", "none"),
+                    "uses_tabular":    self._uses_tabular,
+                    "pretrained":      getattr(tc, "pretrained", False),
+                    "freeze_backbone": getattr(tc, "freeze_backbone", False),
                     "learning_rate":  tc.learning_rate,
                     "weight_decay":   tc.weight_decay,
                     "batch_size":     tc.batch_size,
@@ -147,13 +183,23 @@ class Trainer:
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
+    def _get_lambda(self, epoch: int) -> float:
+        """DANN λ schedule: smooth ramp from 0 to dann_max_lambda over training."""
+        max_lambda = getattr(self.config, "dann_max_lambda", 1.0)
+        p = epoch / max(self.config.num_epochs - 1, 1)
+        return float(max_lambda * (2 / (1 + math.exp(-10 * p)) - 1))
+
     def _forward(self, batch: Dict) -> Tuple[torch.Tensor, torch.Tensor]:
-        images  = batch["image"].to(self.device)
         targets = batch["target"].to(self.device).squeeze()
-        if self._uses_tabular:
+        if self._uses_tabular_only:
+            tabular = batch["tabular"].to(self.device)
+            preds   = self.model(tabular).squeeze()
+        elif self._uses_tabular:
+            images  = batch["image"].to(self.device)
             tabular = batch["tabular"].to(self.device)
             preds   = self.model(images, tabular).squeeze()
         else:
+            images  = batch["image"].to(self.device)
             preds   = self.model(images).squeeze()
         return preds, targets
 
@@ -162,26 +208,82 @@ class Trainer:
         loader: DataLoader,
         train: bool,
         desc: str = "",
+        epoch: int = 0,
     ) -> Tuple[Dict[str, float], Dict[str, float]]:
         """
         Run one full pass over *loader*.
 
         Returns (metrics_dict, cluster_metrics_dict).
         Gradient updates are performed only when train=True.
+        When the model is a DANNDualBranch, domain loss is added during
+        training and domain classifier accuracy is tracked.
         """
         self.model.train() if train else self.model.eval()
 
-        running_loss = 0.0
-        all_preds:    list = []
-        all_targets:  list = []
-        all_clusters: list = []
+        current_lambda      = self._get_lambda(epoch) if (train and self._uses_dann) else 0.0
+        running_loss        = 0.0
+        running_domain_loss = 0.0
+        running_cluster_loss = 0.0
+        domain_correct      = 0
+        domain_total        = 0
+        all_preds:         list = []
+        all_targets:       list = []
+        all_clusters:      list = []
+        all_city_log_means: list = []
+        all_city_log_stds:  list = []
 
         grad_ctx = torch.enable_grad() if train else torch.no_grad()
 
         with grad_ctx:
             for batch in tqdm(loader, desc=desc, leave=False):
-                preds, targets = self._forward(batch)
-                loss = self.criterion(preds, targets)
+
+                if self._uses_dann:
+                    images  = batch["image"].to(self.device)
+                    targets = batch["target"].to(self.device).squeeze()
+                    tabular = batch["tabular"].to(self.device)
+
+                    if train:
+                        country = batch["country_label"].to(self.device)
+                        preds, domain_logits = self.model(images, tabular, current_lambda)
+                        preds     = preds.squeeze()
+                        task_loss = self.criterion(preds, targets)
+                        dom_loss  = self.domain_criterion(domain_logits, country)
+                        loss      = task_loss + current_lambda * dom_loss
+
+                        running_domain_loss += dom_loss.item()
+                        domain_correct += (domain_logits.argmax(1) == country).sum().item()
+                        domain_total   += country.size(0)
+                        running_loss   += task_loss.item()
+                    else:
+                        preds, _ = self.model(images, tabular, 0.0)
+                        preds    = preds.squeeze()
+                        loss     = self.criterion(preds, targets)
+                        running_loss += loss.item()
+
+                elif self._uses_multitask:
+                    images  = batch["image"].to(self.device)
+                    targets = batch["target"].to(self.device).squeeze()
+                    tabular = batch["tabular"].to(self.device)
+
+                    if train:
+                        clusters  = batch["metadata"]["cluster"].to(self.device)
+                        preds, cluster_logits = self.model.forward_multitask(images, tabular)
+                        preds     = preds.squeeze()
+                        task_loss = self.criterion(preds, targets)
+                        aux_loss  = self.cluster_criterion(cluster_logits, clusters)
+                        alpha     = getattr(self.config, "cluster_loss_weight", 0.5)
+                        loss      = task_loss + alpha * aux_loss
+                        running_cluster_loss += aux_loss.item()
+                        running_loss         += task_loss.item()
+                    else:
+                        preds = self.model(images, tabular).squeeze()
+                        loss  = self.criterion(preds, targets)
+                        running_loss += loss.item()
+
+                else:
+                    preds, targets = self._forward(batch)
+                    loss = self.criterion(preds, targets)
+                    running_loss += loss.item()
 
                 if train:
                     self.optimizer.zero_grad()
@@ -189,17 +291,32 @@ class Trainer:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)
                     self.optimizer.step()
 
-                running_loss += loss.item()
                 all_preds.extend(np.atleast_1d(preds.detach().cpu().numpy()))
                 all_targets.extend(np.atleast_1d(targets.detach().cpu().numpy()))
                 all_clusters.extend(batch["metadata"]["cluster"].numpy())
+                all_city_log_means.extend(batch["city_log_mean"].cpu().numpy().flatten())
+                all_city_log_stds.extend(batch["city_log_std"].cpu().numpy().flatten())
+
+        # Build per-sample denorm closure: z → expm1(z * city_std + city_mean)
+        _c_means = np.array(all_city_log_means, dtype=np.float32)
+        _c_stds  = np.array(all_city_log_stds,  dtype=np.float32)
+        def _denorm(t: torch.Tensor) -> torch.Tensor:
+            return torch.expm1(t * torch.from_numpy(_c_stds) + torch.from_numpy(_c_means))
 
         metrics = calculate_metrics(
             np.array(all_preds, dtype=np.float32),
             np.array(all_targets, dtype=np.float32),
-            denormalize_fn=self.denorm,
+            denormalize_fn=_denorm,
         )
         metrics["loss"] = running_loss / len(loader)
+
+        if self._uses_dann and train:
+            metrics["domain_loss"] = running_domain_loss / len(loader)
+            metrics["domain_acc"]  = domain_correct / max(domain_total, 1)
+            metrics["lambda"]      = current_lambda
+
+        if self._uses_multitask and train:
+            metrics["cluster_loss"] = running_cluster_loss / len(loader)
 
         # Per-cluster MAE (diagnostic)
         cluster_metrics: Dict[str, float] = {}
@@ -209,8 +326,11 @@ class Trainer:
                 continue
             cp = np.array(all_preds)[mask]
             ct = np.array(all_targets)[mask]
-            cp = self.denorm(torch.from_numpy(cp)).numpy()
-            ct = self.denorm(torch.from_numpy(ct)).numpy()
+            # Slice city stats to match the cluster subset
+            cm = _c_means[mask]
+            cs = _c_stds[mask]
+            cp = torch.expm1(torch.from_numpy(cp) * torch.from_numpy(cs) + torch.from_numpy(cm)).numpy()
+            ct = torch.expm1(torch.from_numpy(ct) * torch.from_numpy(cs) + torch.from_numpy(cm)).numpy()
             cluster_metrics[f"cluster_{cid}_mae"] = float(np.mean(np.abs(cp - ct)))
 
         return metrics, cluster_metrics
@@ -249,21 +369,46 @@ class Trainer:
         history = {k: [] for k in
                    ["train_loss", "train_mae", "train_r2",
                     "val_loss",   "val_mae",   "val_r2"]}
+        if self._uses_dann:
+            history.update({k: [] for k in
+                            ["train_domain_loss", "train_domain_acc", "lambda"]})
+        if self._uses_multitask:
+            history["train_cluster_loss"] = []
 
         for epoch in range(tc.num_epochs):
             t0 = time.time()
             ep = epoch + 1
 
+            # Unfreeze backbone after warm-up
+            if self._has_backbone and self._warmup_epochs > 0 and epoch == self._warmup_epochs:
+                for p in self.model.backbone.parameters():
+                    p.requires_grad = True
+                print(f"\n  ── Warm-up done: backbone unfrozen "
+                      f"(backbone lr={tc.learning_rate*0.01:.2e}) ──")
+
             train_m, _         = self._run_epoch(self.train_loader, train=True,
-                                                  desc=f"Ep {ep}/{tc.num_epochs} [train]")
+                                                  desc=f"Ep {ep}/{tc.num_epochs} [train]",
+                                                  epoch=epoch)
             val_m,   cluster_m = self._run_epoch(self.val_loader,   train=False,
-                                                  desc=f"Ep {ep}/{tc.num_epochs} [val]  ")
+                                                  desc=f"Ep {ep}/{tc.num_epochs} [val]  ",
+                                                  epoch=epoch)
 
             old_lr = self.optimizer.param_groups[0]["lr"]
             self.scheduler.step(val_m["loss"])
             new_lr = self.optimizer.param_groups[0]["lr"]
 
             elapsed = time.time() - t0
+            aux_str = ""
+            if self._uses_dann:
+                aux_str = (
+                    f"\n  DANN   λ={train_m.get('lambda', 0):.3f}  "
+                    f"dom_loss={train_m.get('domain_loss', 0):.4f}  "
+                    f"dom_acc={train_m.get('domain_acc', 0):.3f}"
+                )
+            elif self._uses_multitask:
+                aux_str = (
+                    f"\n  MultiTask  cluster_loss={train_m.get('cluster_loss', 0):.4f}"
+                )
             print(
                 f"\nEpoch {ep}/{tc.num_epochs}  "
                 f"({elapsed:.1f}s  lr={new_lr:.2e})\n"
@@ -271,6 +416,7 @@ class Trainer:
                 f"MAE={train_m['mae']:.1f}  R²={train_m['r2']:.4f}\n"
                 f"  val    loss={val_m['loss']:.4f}  "
                 f"MAE={val_m['mae']:.1f}  R²={val_m['r2']:.4f}"
+                + aux_str
             )
 
             # TensorBoard
@@ -285,7 +431,7 @@ class Trainer:
 
             # W&B
             if self.use_wandb:
-                wandb.log({
+                log_dict = {
                     "epoch":       epoch,
                     "lr":          new_lr,
                     "train/loss":  train_m["loss"],
@@ -297,12 +443,27 @@ class Trainer:
                     "val/rmse":    val_m["rmse"],
                     "val/r2":      val_m["r2"],
                     **{f"val/{k}": v for k, v in cluster_m.items()},
-                })
+                }
+                if self._uses_dann:
+                    log_dict.update({
+                        "dann/lambda":      train_m.get("lambda", 0),
+                        "dann/domain_loss": train_m.get("domain_loss", 0),
+                        "dann/domain_acc":  train_m.get("domain_acc", 0),
+                    })
+                if self._uses_multitask:
+                    log_dict["multitask/cluster_loss"] = train_m.get("cluster_loss", 0)
+                wandb.log(log_dict)
 
             # History
             for key in ("loss", "mae", "r2"):
                 history[f"train_{key}"].append(float(train_m[key]))
                 history[f"val_{key}"].append(float(val_m[key]))
+            if self._uses_dann:
+                history["train_domain_loss"].append(float(train_m.get("domain_loss", 0)))
+                history["train_domain_acc"].append(float(train_m.get("domain_acc", 0)))
+                history["lambda"].append(float(train_m.get("lambda", 0)))
+            if self._uses_multitask:
+                history["train_cluster_loss"].append(float(train_m.get("cluster_loss", 0)))
 
             # Best checkpoint
             if val_m["loss"] < best_val_loss:

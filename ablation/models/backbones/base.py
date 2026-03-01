@@ -88,13 +88,17 @@ def build_backbone(
         freeze:     freeze all backbone parameters (only heads are trainable)
     """
     from .resnet50 import ResNet50Backbone
-    from .efficientnet import EfficientNetB3Backbone
+    from .efficientnet import EfficientNetB3Backbone, EfficientNetB3RGBBackbone
     from .convnext import ConvNeXtTinyBackbone
+    from .dinov2 import DINOv2Backbone, DINOv2RGBBackbone
 
     registry = {
-        "resnet50":        ResNet50Backbone,
-        "efficientnet_b3": EfficientNetB3Backbone,
-        "convnext_tiny":   ConvNeXtTinyBackbone,
+        "resnet50":            ResNet50Backbone,
+        "efficientnet_b3":     EfficientNetB3Backbone,
+        "efficientnet_b3_rgb": EfficientNetB3RGBBackbone,
+        "convnext_tiny":       ConvNeXtTinyBackbone,
+        "dinov2_vitb14":       DINOv2Backbone,
+        "dinov2_vitb14_rgb":   DINOv2RGBBackbone,
     }
     if name not in registry:
         raise ValueError(

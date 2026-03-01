@@ -1,10 +1,20 @@
-"""Ablation arm: single-branch ConvNeXt-Tiny (image only)."""
+"""
+Cross-attention training script — ConvNeXt-Tiny + cross-attention fusion.
+
+Same cross-attention fusion as crossattn_efficientnet_b3 but using the
+ConvNeXt-Tiny backbone, which outperformed EfficientNet-B3 in the
+dual-branch ablation (MAE 5333 vs 5622).
+
+Usage on Vast.ai:
+    python scripts/train_crossattn_convnext.py
+"""
+
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
-from configs import SingleBranchConfig
+from configs import CrossAttnConfig
 from data import get_cached_dataloaders
 from models import build_model
 from training import Trainer
@@ -13,12 +23,12 @@ JSON_FILE = "/workspace/PopulationDataset/final_clustered_samples.json"
 BASE_DIR  = "/workspace/PopulationDataset"
 CACHE_DIR = "/workspace/PopulationDataset/cache"
 
-cfg = SingleBranchConfig(
-    json_file=JSON_FILE,
-    base_dir=BASE_DIR,
-    backbone="convnext_tiny",
-    wandb_name="single_convnext_tiny",
-    patience=5,
+cfg = CrossAttnConfig(
+    backbone       = "convnext_tiny",
+    json_file      = JSON_FILE,
+    base_dir       = BASE_DIR,
+    wandb_name     = "crossattn_convnext_tiny",
+    patience      = 7,
 )
 
 device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")

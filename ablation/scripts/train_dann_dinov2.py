@@ -1,10 +1,15 @@
-"""Ablation arm: single-branch ConvNeXt-Tiny (image only)."""
+"""
+Ablation arm: DANN dual-branch with DINOv2 ViT-B/14.
+
+Combines the best-performing fusion strategy (DANN) with the strongest
+backbone (DINOv2).  This is the primary model for the CV component.
+"""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
-from configs import SingleBranchConfig
+from configs import DANNConfig
 from data import get_cached_dataloaders
 from models import build_model
 from training import Trainer
@@ -13,12 +18,16 @@ JSON_FILE = "/workspace/PopulationDataset/final_clustered_samples.json"
 BASE_DIR  = "/workspace/PopulationDataset"
 CACHE_DIR = "/workspace/PopulationDataset/cache"
 
-cfg = SingleBranchConfig(
+cfg = DANNConfig(
     json_file=JSON_FILE,
     base_dir=BASE_DIR,
-    backbone="convnext_tiny",
-    wandb_name="single_convnext_tiny",
-    patience=5,
+    backbone="dinov2_vitb14",
+    wandb_name="dann_dinov2_vitb14",
+    warmup_epochs=3,
+    dann_max_lambda=0.3,   # same as best-performing DANN run
+    n_domains=12,
+    num_epochs=100,
+    patience=7,
 )
 
 device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")

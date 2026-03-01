@@ -18,6 +18,7 @@ cfg = DualBranchConfig(
     base_dir=BASE_DIR,
     backbone="efficientnet_b3",
     wandb_name="dual_efficientnet_b3",
+    patience=7,
 )
 
 device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")

@@ -1,10 +1,10 @@
-"""Ablation arm: single-branch ConvNeXt-Tiny (image only)."""
+"""Ablation arm: RGB-only DINOv2 ViT-B/14 (3 channels, no DEM/land-use)."""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
-from configs import SingleBranchConfig
+from configs import RGBOnlyConfig
 from data import get_cached_dataloaders
 from models import build_model
 from training import Trainer
@@ -13,11 +13,13 @@ JSON_FILE = "/workspace/PopulationDataset/final_clustered_samples.json"
 BASE_DIR  = "/workspace/PopulationDataset"
 CACHE_DIR = "/workspace/PopulationDataset/cache"
 
-cfg = SingleBranchConfig(
+cfg = RGBOnlyConfig(
     json_file=JSON_FILE,
     base_dir=BASE_DIR,
-    backbone="convnext_tiny",
-    wandb_name="single_convnext_tiny",
+    backbone="dinov2_vitb14_rgb",
+    wandb_name="rgb_only_dinov2_vitb14",
+    warmup_epochs=3,
+    num_epochs=100,
     patience=5,
 )
 

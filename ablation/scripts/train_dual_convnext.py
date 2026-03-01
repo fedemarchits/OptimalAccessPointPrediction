@@ -18,6 +18,7 @@ cfg = DualBranchConfig(
     base_dir=BASE_DIR,
     backbone="convnext_tiny",
     wandb_name="dual_convnext_tiny",
+    patience=7,
 )
 
 device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")

@@ -79,15 +79,57 @@ def _build_city_mapping(base_dir: Path) -> Dict[str, Dict[str, Path]]:
     return mapping
 
 
+_SPLIT_FILE = Path(__file__).parent / "city_split.json"
+
+
 def _city_split(data: list, train_ratio: float, val_ratio: float,
                 seed: int) -> Tuple[set, set, set]:
-    cities = list({s["city"] for s in data})
+    # Use the canonical fixed split if it has been generated
+    if _SPLIT_FILE.exists():
+        with open(_SPLIT_FILE) as f:
+            sp = json.load(f)
+        print(f"  Loaded fixed city split from {_SPLIT_FILE}")
+        return set(sp["train"]), set(sp["val"]), set(sp["test"])
+
+    # Fallback: compute deterministically (run generate_split.py to fix it)
+    print("  WARNING: city_split.json not found — computing split dynamically.")
+    print("  Run: python data/generate_split.py --json <path> to fix it.")
+    cities = sorted({s["city"] for s in data})
     rng = np.random.default_rng(seed)
     rng.shuffle(cities)
     n    = len(cities)
     n_tr = int(n * train_ratio)
     n_va = int(n * val_ratio)
     return set(cities[:n_tr]), set(cities[n_tr:n_tr + n_va]), set(cities[n_tr + n_va:])
+
+
+def _city_rgb_stats(src_rgb) -> dict:
+    """
+    Compute per-channel RGB mean/std from a downsampled raster in [0, 1].
+    Returns {r_mean, g_mean, b_mean, r_std, g_std, b_std}.
+    """
+    H, W = src_rgb.height, src_rgb.width
+    scale = max(1, min(H, W) // 512)
+    out_h, out_w = max(1, H // scale), max(1, W // scale)
+    try:
+        import rasterio.enums
+        data = src_rgb.read(
+            [1, 2, 3],
+            out_shape=(3, out_h, out_w),
+            resampling=rasterio.enums.Resampling.average,
+        ).astype(np.float32) / 255.0
+    except Exception:
+        return {"r_mean": 0.485, "g_mean": 0.456, "b_mean": 0.406,
+                "r_std":  0.229, "g_std":  0.224, "b_std":  0.225}
+    stats = {}
+    for ch, name in enumerate(["r", "g", "b"]):
+        pixels = data[ch].ravel()
+        valid  = pixels[pixels > 0.01]
+        if len(valid) < 100:
+            valid = pixels
+        stats[f"{name}_mean"] = float(valid.mean())
+        stats[f"{name}_std"]  = float(max(float(valid.std()), 1e-4))
+    return stats
 
 
 def _read_crop(src_rgb, src_dem, src_lu,
@@ -170,16 +212,34 @@ def preprocess(
         split_map[c] = ("train" if c in train_cities
                         else "val" if c in val_cities else "test")
 
-    # ── Compute training-set normalisation stats ───────────────────────────────
+    # ── Compute normalisation stats ────────────────────────────────────────────
     train_samples = [s for s in data if split_map[s["city"]] == "train"]
 
-    # Target stats
+    # Per-city log1p stats — computed from ALL samples in each city (no leakage
+    # since cities are fully disjoint across splits)
+    from collections import defaultdict
+    city_raw_pops: Dict[str, list] = defaultdict(list)
+    for s in data:
+        city_raw_pops[s["city"]].append(
+            float(np.clip(s["population_15min_walk"], 0.0, target_clamp_max))
+        )
+    city_log_stats: Dict[str, Dict[str, float]] = {}
+    for city, pops in city_raw_pops.items():
+        log_pops = np.log1p(np.array(pops, dtype=np.float32))
+        city_log_stats[city] = {
+            "mean": float(log_pops.mean()),
+            # Clamp std to avoid division-by-zero for single-sample cities
+            "std":  float(max(float(log_pops.std()), 1e-4)),
+        }
+    print(f"\nPer-city z-score stats computed for {len(city_log_stats)} cities")
+
+    # Global log1p stats (kept for backwards-compat in stats.json)
     raw_targets = np.array([s["population_15min_walk"] for s in train_samples], dtype=np.float32)
     raw_targets = np.clip(raw_targets, 0.0, target_clamp_max)
     log_targets = np.log1p(raw_targets)
     log_mean = float(log_targets.mean())
     log_std  = float(log_targets.std())
-    print(f"\nTarget stats (train, log1p):  mean={log_mean:.3f}  std={log_std:.3f}")
+    print(f"Global target stats (train, log1p):  mean={log_mean:.3f}  std={log_std:.3f}")
 
     # Tabular stats (log1p → z-score, from train split)
     raw_tab = np.array(
@@ -205,9 +265,14 @@ def preprocess(
         out_path / "landuse.dat", mode="w+", dtype=np.uint8,
         shape=(N, 1, pad_size, pad_size))
 
-    targets_arr  = np.zeros(N, dtype=np.float32)
-    tabular_arr  = np.zeros((N, N_TABULAR), dtype=np.float32)
-    index_list   = []
+    targets_arr       = np.zeros(N, dtype=np.float32)
+    city_log_mean_arr = np.zeros(N, dtype=np.float32)
+    city_log_std_arr  = np.zeros(N, dtype=np.float32)
+    tabular_arr       = np.zeros((N, N_TABULAR), dtype=np.float32)
+    rgb_city_mean_arr = np.zeros((N, 3), dtype=np.float32)
+    rgb_city_std_arr  = np.zeros((N, 3), dtype=np.float32)
+    city_rgb_stats_all: Dict[str, dict] = {}
+    index_list        = []
 
     # ── Extract crops city by city ────────────────────────────────────────────
     cities_ordered = sorted({s["city"] for s in data})
@@ -229,7 +294,14 @@ def preprocess(
             n_failed += len(sample_by_city[city])
             continue
 
+        rgb_stats = _city_rgb_stats(src_rgb)
+        city_rgb_stats_all[city] = rgb_stats
+        _city_rgb_m = np.array([rgb_stats["r_mean"], rgb_stats["g_mean"], rgb_stats["b_mean"]], dtype=np.float32)
+        _city_rgb_s = np.array([rgb_stats["r_std"],  rgb_stats["g_std"],  rgb_stats["b_std"]],  dtype=np.float32)
+
         for i, s in sample_by_city[city]:
+            rgb_city_mean_arr[i] = _city_rgb_m
+            rgb_city_std_arr[i]  = _city_rgb_s
             sp  = s.get("start_point", {})
             lat = sp.get("lat", s.get("lat", 0.0))
             lon = sp.get("lng", s.get("lon", 0.0))
@@ -245,9 +317,14 @@ def preprocess(
                 index_list.append({"city": city, "cluster": s.get("cluster", 0),
                                    "split": split_map[city], "valid": True})
 
-            # Target
-            raw_t = float(np.clip(s["population_15min_walk"], 0.0, target_clamp_max))
-            targets_arr[i] = float(np.log1p(raw_t))
+            # Target — per-city z-score of log1p(population)
+            raw_t  = float(np.clip(s["population_15min_walk"], 0.0, target_clamp_max))
+            log_t  = float(np.log1p(raw_t))
+            c_mean = city_log_stats[city]["mean"]
+            c_std  = city_log_stats[city]["std"]
+            targets_arr[i]       = (log_t - c_mean) / c_std
+            city_log_mean_arr[i] = c_mean
+            city_log_std_arr[i]  = c_std
 
             # Tabular
             feats = s.get("osm_features") or [0.0] * N_TABULAR
@@ -259,8 +336,12 @@ def preprocess(
     # ── Flush and save ────────────────────────────────────────────────────────
     del rgb_mm, dem_mm, lu_mm   # flush memmaps
 
-    np.save(out_path / "targets.npy", targets_arr)
-    np.save(out_path / "tabular.npy", tabular_arr)
+    np.save(out_path / "targets.npy",        targets_arr)
+    np.save(out_path / "city_log_mean.npy",  city_log_mean_arr)
+    np.save(out_path / "city_log_std.npy",   city_log_std_arr)
+    np.save(out_path / "tabular.npy",        tabular_arr)
+    np.save(out_path / "rgb_city_mean.npy",  rgb_city_mean_arr)
+    np.save(out_path / "rgb_city_std.npy",   rgb_city_std_arr)
 
     with open(out_path / "index.json", "w") as f:
         json.dump(index_list, f)
@@ -273,6 +354,9 @@ def preprocess(
             "jitter_pixels": jitter_pixels,
             "target_clamp_max": target_clamp_max,
             "n_samples": N, "n_failed": n_failed,
+            "target_norm": "city_zscore",
+            "city_log_stats": city_log_stats,
+            "city_rgb_stats": city_rgb_stats_all,
         }, f, indent=2)
 
     # Summary

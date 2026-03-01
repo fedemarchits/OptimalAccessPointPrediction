@@ -1,23 +1,29 @@
 """
 Dual-branch (image + tabular) models.
 
-Two variants:
+Variants:
 
   DualBranchModel — feature-level fusion (concat + MLP):
     image  → backbone → (B, feat_dim)       ──┐
                                                ├─ cat → FusionHead → (B, 1)
     tabular → TabularMLP → (B, embed_dim)   ──┘
 
-  CrossAttnDualBranch — cross-attention fusion (EfficientNet only):
-    image  → backbone (no pool) → (B, 1536, 7, 7) spatial map
+  CrossAttnDualBranch — cross-attention fusion (any backbone with forward_spatial):
+    image  → backbone (no pool) → (B, feat_dim, H, W) spatial map
     tabular → TabularMLP → (B, embed_dim) ── query
     CrossAttentionFusion: tabular queries image spatial locations
     output: cat(global_pool, attended, tab_emb) → FusionHead → (B, 1)
+
+  MultiTaskDualBranch — dual branch + collaborative cluster-prediction head:
+    image + tabular → DualBranchModel (regression)
+    image feats     → ClusterHead (auxiliary classification of urban cluster 0-4)
+    Loss: L_task + cluster_loss_weight * L_cluster
 """
 
 import torch
 import torch.nn as nn
 from .backbones.base import MultiChannelBackbone
+from .grad_reverse import grad_reverse
 
 
 class TabularMLP(nn.Module):
@@ -89,6 +95,10 @@ class DualBranchModel(nn.Module):
         self.backbone = backbone
         self.tabular_mlp = TabularMLP(tabular_dim, tabular_embed_dim)
         self.fusion = FusionHead(backbone.feat_dim, tabular_embed_dim)
+
+    def get_features(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
+        """Return backbone features (B, feat_dim) for UMAP / analysis."""
+        return self.backbone(image)
 
     def forward(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
         """
@@ -194,22 +204,24 @@ class FiLMGenerator(nn.Module):
 
 class FiLMDualBranch(nn.Module):
     """
-    EfficientNet-B3 + FiLM (Feature-wise Linear Modulation) fusion.
+    Backbone + FiLM (Feature-wise Linear Modulation) fusion.
 
     The OSM tabular features generate per-channel scale and shift
-    parameters that modulate the EfficientNet spatial feature map
+    parameters that modulate the backbone spatial feature map
     *before* global average pooling.  This is complementary to
     CrossAttnDualBranch: FiLM controls *what features matter* (channel-
     wise recalibration) while cross-attention controls *where to look*
     (spatial attention).
 
+    Requires backbone to implement forward_spatial() → (B, feat_dim, H, W).
+
     Architecture:
-        image   → EfficientNet-B3 (no pool) → (B, 1536, 7, 7)
-        tabular → FiLMGenerator             → γ (B,1536), β (B,1536)
-        modulated = γ * spatial + β         → (B, 1536, 7, 7)
-        global avg pool                     → (B, 1536)
-        concat with tabular embedding       → (B, 1600)
-        FusionHead                          → (B, 1)
+        image   → backbone (no pool) → (B, feat_dim, H, W)
+        tabular → FiLMGenerator      → γ (B, feat_dim), β (B, feat_dim)
+        modulated = γ * spatial + β  → (B, feat_dim, H, W)
+        global avg pool              → (B, feat_dim)
+        concat with tabular embedding → (B, feat_dim + tab_embed_dim)
+        FusionHead                   → (B, 1)
     """
 
     uses_tabular: bool = True
@@ -221,11 +233,18 @@ class FiLMDualBranch(nn.Module):
         tabular_embed_dim: int = 64,
     ):
         super().__init__()
-        img_dim = 1536   # EfficientNet-B3
+        img_dim = backbone.feat_dim
 
         self.backbone    = backbone
         self.tabular_mlp = TabularMLP(tabular_dim, tabular_embed_dim)
         self.film_gen    = FiLMGenerator(tabular_embed_dim, img_dim)
+
+        # Replicate the normalization that backbone.pool applies after global avg pool.
+        # ConvNeXt's pool includes a LayerNorm; forward_spatial skips it, so we add
+        # an equivalent one here to keep features in the expected normalized range.
+        pool_layers = list(backbone.pool.children()) if hasattr(backbone, "pool") else []
+        has_ln = any(isinstance(m, nn.LayerNorm) for m in pool_layers)
+        self.post_pool_ln = nn.LayerNorm(img_dim) if has_ln else nn.Identity()
 
         fusion_in = img_dim + tabular_embed_dim   # 1536 + 64 = 1600
         self.fusion = nn.Sequential(
@@ -255,7 +274,7 @@ class FiLMDualBranch(nn.Module):
         # Apply FiLM: channel-wise scale + shift on the spatial map
         modulated    = gamma.unsqueeze(-1).unsqueeze(-1) * spatial \
                      + beta.unsqueeze(-1).unsqueeze(-1)     # (B, 1536, 7, 7)
-        global_feats = modulated.mean(dim=[2, 3])           # (B, 1536)
+        global_feats = self.post_pool_ln(modulated.mean(dim=[2, 3]))  # (B, 1536)
 
         combined = torch.cat([global_feats, tab_emb], dim=1)  # (B, 1600)
         return self.fusion(combined)                           # (B, 1)
@@ -263,12 +282,15 @@ class FiLMDualBranch(nn.Module):
 
 class CrossAttnDualBranch(nn.Module):
     """
-    EfficientNet-B3 + cross-attention dual-branch model.
+    Backbone + cross-attention dual-branch model.
 
     The final representation concatenates three complementary views:
-      1. Global average pooled image features   (B, 1536)  — "what is in the image overall"
+      1. Global average pooled image features   (B, feat_dim)  — "what is in the image overall"
       2. Cross-attended image features          (B, d_attn) — "what the OSM context focuses on"
       3. Tabular embedding                      (B, tab_embed_dim) — "raw neighbourhood stats"
+
+    Requires backbone to implement forward_spatial() → (B, feat_dim, H, W).
+    Compatible with any backbone (EfficientNet-B3, ConvNeXt-Tiny, etc.).
 
     This is an ablation variant designed to be compared directly against
     DualBranchModel (same backbone, same tabular branch, richer fusion).
@@ -278,19 +300,25 @@ class CrossAttnDualBranch(nn.Module):
 
     def __init__(
         self,
-        backbone,                        # EfficientNetB3Backbone
+        backbone,
         tabular_dim: int = 15,
         tabular_embed_dim: int = 64,
         d_attn: int = 256,
         n_heads: int = 8,
     ):
         super().__init__()
-        img_dim = 1536   # EfficientNet-B3 feature channels
+        img_dim = backbone.feat_dim
 
         self.backbone     = backbone
         self.tabular_mlp  = TabularMLP(tabular_dim, tabular_embed_dim)
         self.cross_attn   = CrossAttentionFusion(img_dim, tabular_embed_dim,
                                                  d_attn, n_heads)
+
+        # Same LayerNorm fix as FiLMDualBranch — ConvNeXt pool includes LN
+        # which is bypassed when using forward_spatial.
+        pool_layers = list(backbone.pool.children()) if hasattr(backbone, "pool") else []
+        has_ln = any(isinstance(m, nn.LayerNorm) for m in pool_layers)
+        self.post_pool_ln = nn.LayerNorm(img_dim) if has_ln else nn.Identity()
 
         fusion_in = img_dim + d_attn + tabular_embed_dim   # 1536 + 256 + 64 = 1856
         self.fusion = nn.Sequential(
@@ -317,10 +345,169 @@ class CrossAttnDualBranch(nn.Module):
         spatial = self.backbone.forward_spatial(image)          # (B, 1536, H, W)
         B, C, H, W = spatial.shape
         spatial_seq  = spatial.flatten(2).transpose(1, 2)       # (B, H*W, 1536)
-        global_feats = spatial.mean(dim=[2, 3])                 # (B, 1536)
+        global_feats = self.post_pool_ln(spatial.mean(dim=[2, 3]))  # (B, 1536)
 
         tab_feats = self.tabular_mlp(tabular)                   # (B, tab_embed_dim)
         attended  = self.cross_attn(spatial_seq, tab_feats)     # (B, d_attn)
 
         combined = torch.cat([global_feats, attended, tab_feats], dim=1)  # (B, 1856)
         return self.fusion(combined)                            # (B, 1)
+
+    def get_features(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
+        """Return global-pooled backbone features (B, feat_dim) for UMAP / analysis."""
+        return self.backbone(image)
+
+
+# ---------------------------------------------------------------------------
+# DANN dual-branch (domain-adversarial training)
+# ---------------------------------------------------------------------------
+
+class DANNDualBranch(nn.Module):
+    """
+    DualBranchModel extended with a domain-adversarial classifier.
+
+    A Gradient Reversal Layer (GRL) sits between the backbone and the domain
+    classifier head.  During backpropagation the GRL negates the classifier's
+    gradient, forcing the backbone to produce country-invariant features while
+    still minimising the population regression loss.
+
+    Architecture:
+        image   → backbone → (B, feat_dim)
+        tabular → TabularMLP → (B, tab_embed_dim)
+
+        Task branch:
+            feat + tab_emb → FusionHead → (B, 1)   [Huber loss]
+
+        Domain branch (training only):
+            GRL(feat, λ) → DomainClassifier → (B, n_domains)   [CrossEntropy loss]
+
+    The total loss is:  L_task + λ * L_domain
+    λ is annealed from 0 → max_lambda over the course of training so the
+    domain pressure builds up gradually after the task head has stabilised.
+
+    Reference:
+        Ganin et al., "Domain-Adversarial Training of Neural Networks", JMLR 2016.
+    """
+
+    uses_tabular: bool = True
+    uses_dann:    bool = True
+
+    def __init__(
+        self,
+        backbone: MultiChannelBackbone,
+        n_domains: int,
+        tabular_dim: int = 15,
+        tabular_embed_dim: int = 64,
+    ):
+        super().__init__()
+        self.backbone    = backbone
+        img_dim          = backbone.feat_dim
+
+        self.tabular_mlp = TabularMLP(tabular_dim, tabular_embed_dim)
+        self.fusion      = FusionHead(img_dim, tabular_embed_dim)
+
+        # Domain classifier (applied after GRL)
+        self.domain_classifier = nn.Sequential(
+            nn.Linear(img_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, n_domains),
+        )
+
+    def get_features(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
+        """Return backbone features (B, feat_dim) for UMAP / analysis."""
+        return self.backbone(image)
+
+    def forward(
+        self,
+        image:   torch.Tensor,
+        tabular: torch.Tensor,
+        lambda_: float = 0.0,
+    ):
+        """
+        Args:
+            image:   (B, 12, H, W)
+            tabular: (B, tabular_dim)
+            lambda_: GRL strength (0 during eval, annealed 0→1 during training)
+        Returns:
+            pred          (B, 1)   — population prediction
+            domain_logits (B, n_domains) — domain classifier output
+        """
+        feats   = self.backbone(image)               # (B, feat_dim)
+        tab_emb = self.tabular_mlp(tabular)          # (B, tab_embed_dim)
+        pred    = self.fusion(feats, tab_emb)        # (B, 1)
+
+        rev           = grad_reverse(feats, lambda_)
+        domain_logits = self.domain_classifier(rev)  # (B, n_domains)
+
+        return pred, domain_logits
+
+
+# ---------------------------------------------------------------------------
+# Multi-task dual-branch (collaborative cluster-prediction auxiliary task)
+# ---------------------------------------------------------------------------
+
+class MultiTaskDualBranch(DualBranchModel):
+    """
+    DualBranchModel extended with a collaborative cluster-prediction head.
+
+    Unlike DANN (adversarial country removal), this adds a *positive* auxiliary
+    task: the backbone must simultaneously predict population (regression) and
+    identify which urban-fabric cluster (0-4) the sample belongs to.
+
+    Forcing the backbone to distinguish residential vs commercial vs industrial
+    clusters gives it a richer notion of urban morphology, which directly
+    benefits population estimation.
+
+    Loss: L_total = L_task + cluster_loss_weight * L_cluster
+    where L_cluster = CrossEntropyLoss over 5 urban-fabric clusters.
+
+    forward() returns only the population prediction (standard interface,
+    compatible with evaluation and visualization scripts).
+    forward_multitask() returns (pred, cluster_logits) and is called by the
+    Trainer during training.
+    """
+
+    uses_tabular:   bool = True
+    uses_multitask: bool = True
+
+    def __init__(
+        self,
+        backbone: "MultiChannelBackbone",
+        n_clusters: int = 5,
+        tabular_dim: int = 15,
+        tabular_embed_dim: int = 64,
+    ):
+        super().__init__(backbone, tabular_dim, tabular_embed_dim)
+        self.n_clusters = n_clusters
+        self.cluster_head = nn.Sequential(
+            nn.Linear(backbone.feat_dim, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(128, n_clusters),
+        )
+
+    def forward(self, image: torch.Tensor, tabular: torch.Tensor) -> torch.Tensor:
+        """Population prediction only — used during eval and visualization."""
+        return super().forward(image, tabular)
+
+    def forward_multitask(
+        self, image: torch.Tensor, tabular: torch.Tensor
+    ):
+        """
+        Training forward — returns (pred, cluster_logits).
+
+        Args:
+            image:   (B, 12, H, W)
+            tabular: (B, tabular_dim)
+        Returns:
+            pred          (B, 1)          — population prediction
+            cluster_logits (B, n_clusters) — cluster classifier output
+        """
+        img_feats      = self.backbone(image)            # (B, feat_dim)
+        tab_feats      = self.tabular_mlp(tabular)       # (B, tab_embed_dim)
+        pred           = self.fusion(img_feats, tab_feats)
+        cluster_logits = self.cluster_head(img_feats)    # (B, n_clusters)
+        return pred, cluster_logits

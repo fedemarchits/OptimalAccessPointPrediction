@@ -20,6 +20,7 @@ cfg = SingleBranchConfig(
     base_dir=BASE_DIR,
     backbone="resnet50",
     wandb_name="single_resnet50",
+    patience=5,
 )
 
 device = cfg.device or ("cuda" if torch.cuda.is_available() else "cpu")

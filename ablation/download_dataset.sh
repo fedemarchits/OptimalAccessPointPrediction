@@ -3,30 +3,16 @@
 #  Download OptimalAccessDataset.zip from Google Drive and extract it.
 #
 #  Usage:
-#    bash download_dataset.sh <GOOGLE_DRIVE_FILE_ID>
-#
-#  The file ID is the part between /d/ and /view in the share URL:
-#    https://drive.google.com/file/d/THIS_PART_HERE/view?usp=sharing
+#    bash download_dataset.sh
 #
 #  Requirements:
 #    - File must be shared as "Anyone with the link" in Google Drive
 # =============================================================================
 set -e
 
-FILE_ID="${1}"
+FILE_ID="1uYaG32ULxgagv-FdiMrUp3RTd8LQqUK4"
 DEST_DIR="/workspace/PopulationDataset"
 ZIP_PATH="/workspace/OptimalAccessDataset.zip"
-
-if [ -z "$FILE_ID" ]; then
-    echo "Usage: bash download_dataset.sh <GOOGLE_DRIVE_FILE_ID>"
-    echo ""
-    echo "Example:"
-    echo "  bash download_dataset.sh 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs"
-    echo ""
-    echo "Find your file ID in the Google Drive share link:"
-    echo "  https://drive.google.com/file/d/FILE_ID_HERE/view?usp=sharing"
-    exit 1
-fi
 
 echo "===== 1. Installing gdown ====="
 pip install -q gdown
@@ -44,7 +30,19 @@ unzip -q "$ZIP_PATH" -d "$DEST_DIR"
 echo "  Extracted to $DEST_DIR"
 
 echo ""
-echo "===== 4. Verifying structure ====="
+echo "===== 4. Flatten if needed ====="
+# Zip sometimes extracts into a nested folder (e.g. from macOS)
+if [ -d "$DEST_DIR/PopulationDataset" ]; then
+    echo "  Flattening nested directory..."
+    mv "$DEST_DIR/PopulationDataset/"* "$DEST_DIR/"
+    rm -rf "$DEST_DIR/PopulationDataset"
+fi
+if [ -d "$DEST_DIR/__MACOSX" ]; then
+    rm -rf "$DEST_DIR/__MACOSX"
+fi
+
+echo ""
+echo "===== 5. Verifying structure ====="
 for d in satellite_images dem_height segmentation_land_use; do
     if [ -d "$DEST_DIR/$d" ]; then
         count=$(ls "$DEST_DIR/$d" | wc -l)
